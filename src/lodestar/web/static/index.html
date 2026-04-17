@@ -1,0 +1,580 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1">
+  <title>Lodestar — Personal Network Navigator</title>
+  <link rel="stylesheet" href="/static/style.css?v=20260417-9">
+  <script src="/static/cytoscape.min.js"></script>
+  <script src="/static/echarts.min.js"></script>
+  <script defer src="/static/app.js?v=20260417-9"></script>
+  <script defer src="/static/alpine.min.js"></script>
+</head>
+<body x-data="appState()" x-init="init()" :class="searching ? 'searching' : ''">
+
+  <!-- ============================================================
+       Inline SVG icon sprite
+       ============================================================ -->
+  <svg width="0" height="0" style="position:absolute" aria-hidden="true">
+    <defs>
+      <symbol id="i-search" viewBox="0 0 16 16">
+        <circle cx="7" cy="7" r="5" fill="none" stroke="currentColor" stroke-width="1.5"/>
+        <line x1="11" y1="11" x2="14" y2="14" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>
+      </symbol>
+      <symbol id="i-path" viewBox="0 0 16 16">
+        <path d="M2 5 H12 M10 3 L12 5 L10 7" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
+        <path d="M14 11 H4 M6 9 L4 11 L6 13" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
+      </symbol>
+      <symbol id="i-broker" viewBox="0 0 16 16">
+        <circle cx="3" cy="8" r="1.75" fill="none" stroke="currentColor" stroke-width="1.5"/>
+        <circle cx="13" cy="8" r="1.75" fill="none" stroke="currentColor" stroke-width="1.5"/>
+        <path d="M4.75 8 H11.25" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>
+      </symbol>
+      <symbol id="i-plus" viewBox="0 0 16 16">
+        <path d="M8 3 V13 M3 8 H13" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>
+      </symbol>
+      <symbol id="i-filter" viewBox="0 0 16 16">
+        <line x1="2" y1="4" x2="14" y2="4" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>
+        <line x1="2" y1="8" x2="14" y2="8" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>
+        <line x1="2" y1="12" x2="14" y2="12" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>
+        <circle cx="5" cy="4" r="1.5" fill="currentColor"/>
+        <circle cx="10" cy="8" r="1.5" fill="currentColor"/>
+        <circle cx="6" cy="12" r="1.5" fill="currentColor"/>
+      </symbol>
+      <symbol id="i-chart" viewBox="0 0 16 16">
+        <rect x="2" y="9" width="2.5" height="5" fill="currentColor" rx="0.5"/>
+        <rect x="6.75" y="5" width="2.5" height="9" fill="currentColor" rx="0.5"/>
+        <rect x="11.5" y="2" width="2.5" height="12" fill="currentColor" rx="0.5"/>
+      </symbol>
+      <symbol id="i-close" viewBox="0 0 16 16">
+        <path d="M4 4 L12 12 M12 4 L4 12" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>
+      </symbol>
+      <symbol id="i-arrow" viewBox="0 0 16 16">
+        <path d="M3 8 H13 M10 5 L13 8 L10 11" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
+      </symbol>
+    </defs>
+  </svg>
+
+  <!-- Cytoscape canvas -->
+  <div id="cy"></div>
+
+  <!-- ========== Top bar ========== -->
+  <div class="topbar">
+    <div class="brand"><span class="brand-mark" aria-hidden="true"></span>Lodestar</div>
+    <div class="search-box">
+      <span class="icon"><svg class="ico" width="14" height="14"><use href="#i-search"/></svg></span>
+      <input id="search-input" type="text" x-model="query"
+             @keydown.enter="runSearch()"
+             placeholder="说出你的目标，例如「找量化私募聊因子」">
+      <template x-if="query">
+        <button type="button" class="clear" @click="clearSearch()" title="清除">
+          <svg width="12" height="12"><use href="#i-close"/></svg>
+        </button>
+      </template>
+      <button type="button"
+              class="search-submit"
+              :disabled="searching"
+              :aria-busy="searching"
+              @click="runSearch()"
+              title="查询 (Enter)">
+        <span x-text="searching ? '检索中…' : '查询'"></span>
+      </button>
+      <label class="toggle" title="跳过 LLM 解析，直接关键词匹配">
+        <input type="checkbox" x-model="noLLM"> RAW
+      </label>
+    </div>
+    <button class="btn" @click="enterTwoPerson()" title="找两人之间的路径">
+      <svg class="ico" width="14" height="14"><use href="#i-path"/></svg>
+      <span>双人路径</span>
+    </button>
+    <button class="btn" @click="openIntros()" title="发现你能撮合的双方">
+      <svg class="ico" width="14" height="14"><use href="#i-broker"/></svg>
+      <span>引荐</span>
+    </button>
+    <button class="btn primary" @click="openAdd()" title="添加联系人 (N)">
+      <svg class="ico" width="14" height="14"><use href="#i-plus"/></svg>
+      <span>新联系人</span>
+    </button>
+    <button class="btn icon-only" @click="showHelp = true" title="快捷键 (?)">?</button>
+  </div>
+
+  <template x-if="viewMode === 'ambient' && !query && !detail && !twoPersonMode">
+    <div class="ambient-hint" x-text="ambientHint"></div>
+  </template>
+
+  <!-- ========== Two-person path mode banner ========== -->
+  <template x-if="twoPersonMode">
+    <div class="mode-banner">
+      <span>双人路径</span>
+      <span class="pill" x-text="pathStart ? pathStart.label : '点击起点'"></span>
+      <svg width="12" height="12" style="color:var(--text-muted)"><use href="#i-arrow"/></svg>
+      <span class="pill" x-text="pathEnd ? pathEnd.label : '点击终点'"></span>
+      <button @click="exitTwoPerson()">退出</button>
+    </div>
+  </template>
+
+  <!-- ========== Filters panel ========== -->
+  <div class="panel panel-filters" x-show="showFilters" x-transition>
+    <h3>过滤
+      <span class="ct" x-text="`${filters.industries.length} active`"></span>
+      <button class="close" @click="showFilters = false">
+        <svg width="12" height="12"><use href="#i-close"/></svg>
+      </button>
+    </h3>
+    <div class="filter-group">
+      <div class="label">行业</div>
+      <div class="chip-row">
+        <template x-for="[name, color] in industriesList.slice(0, 9)" :key="name">
+          <span class="chip"
+                :class="filters.industries.includes(name) ? 'active' : ''"
+                @click="toggleIndustry(name)">
+            <span class="swatch" :style="`background:${color}`"></span>
+            <span x-text="name"></span>
+          </span>
+        </template>
+      </div>
+    </div>
+    <div class="filter-group">
+      <div class="label">最低可信度</div>
+      <input type="range" min="0" max="5" step="1" class="range"
+             :value="filters.minStrength"
+             @input="setMinStrength($event.target.value)">
+      <div class="range-row">
+        <span x-text="filters.minStrength === 0 ? 'ALL' : `≥ ${filters.minStrength}`"></span>
+        <button class="chip" @click="clearFilters()">重置</button>
+      </div>
+    </div>
+    <div class="filter-group">
+      <div class="label">名字 / 标签</div>
+      <input type="text" placeholder="输入关键词"
+             x-model="filters.search"
+             @input.debounce.300ms="applyFilters(filters)">
+    </div>
+  </div>
+
+  <!-- ========== Top paths panel ========== -->
+  <template x-if="(targets.length + direct.length + weak.length) > 0 && viewMode === 'intent'">
+    <div class="panel panel-paths">
+      <h3 x-text="pathMode ? '双人路径' : '引荐路径'">引荐路径
+        <span class="ct"
+              x-text="pathMode
+                ? `${targets.length} 条候选 · 已按强度排序`
+                : `${targets.length} 目标 · ${direct.length} 直接 · ${weak.length} 弱认识`"></span>
+        <button class="close" @click="clearSearch()">
+          <svg width="12" height="12"><use href="#i-close"/></svg>
+        </button>
+      </h3>
+      <div x-show="intent" style="margin-bottom:10px;">
+        <span class="intent-chip" x-text="`→ ${intent}`"></span>
+      </div>
+
+      <!-- 目标人物（多跳引荐 / 双人路径候选） -->
+      <template x-if="targets.length > 0">
+        <div class="path-section">
+          <div class="path-section-head">
+            <span class="kind-dot kind-target"></span>
+            <span x-text="pathMode ? '可行路径' : '推荐引荐目标'"></span>
+            <span class="hint"
+                  x-text="pathMode
+                    ? `从 ${pairLabels && pairLabels.start} 到 ${pairLabels && pairLabels.end}，点击切换`
+                    : '圈内有人能引荐到的人物'"></span>
+          </div>
+          <template x-for="(p, idx) in targets" :key="'t-'+idx+'-'+p.target_id">
+            <div class="path-row path-row-target"
+                 :class="{ 'is-active': activePathKey === 't-'+idx+'-'+p.target_id }"
+                 @click="highlightPath(p, 't-'+idx+'-'+p.target_id)">
+              <span class="rank" x-text="String(idx + 1).padStart(2, '0')"></span>
+              <div class="body">
+                <div class="name-line">
+                  <span class="name" x-text="p.target_name"></span>
+                  <span class="kind-chip kind-chip-target"
+                        x-text="`${p.path.length - 1} 跳`"></span>
+                </div>
+                <div class="path-chain">
+                  <template x-for="(s, i) in p.path" :key="i">
+                    <span>
+                      <span class="chain-node"
+                            :class="{ 'is-me': i === 0,
+                                      'is-target': i === p.path.length - 1 }"
+                            x-text="s.name"></span>
+                      <template x-if="i < p.path.length - 1">
+                        <span class="chain-arrow">→</span>
+                      </template>
+                    </span>
+                  </template>
+                </div>
+                <div class="path-context"
+                     x-text="pathContextLine(p)"></div>
+                <div class="path-next" x-text="nextStepText(p)"></div>
+              </div>
+              <span class="score" x-text="p.combined_score.toFixed(2)"></span>
+            </div>
+          </template>
+        </div>
+      </template>
+
+      <!-- 直接好友 -->
+      <template x-if="direct.length > 0">
+        <div class="path-section">
+          <div class="path-section-head">
+            <span class="kind-dot kind-direct"></span>
+            <span>你直接认识的人</span>
+            <span class="hint">可立即联系</span>
+          </div>
+          <template x-for="(p, idx) in direct" :key="'d'+p.target_id">
+            <div class="path-row"
+                 :class="{ 'is-active': activePathKey === 'd'+p.target_id }"
+                 @click="highlightPath(p, 'd'+p.target_id)">
+              <span class="rank" x-text="String(idx + 1).padStart(2, '0')"></span>
+              <div class="body">
+                <div class="name-line">
+                  <span class="name" x-text="p.target_name"></span>
+                  <span class="kind-chip kind-chip-direct">直接</span>
+                </div>
+                <div class="path-context" x-text="pathContextLine(p)"></div>
+              </div>
+              <span class="score" x-text="p.combined_score.toFixed(2)"></span>
+            </div>
+          </template>
+        </div>
+      </template>
+
+      <!-- 弱认识 -->
+      <template x-if="weak.length > 0">
+        <div class="path-section">
+          <div class="path-section-head">
+            <span class="kind-dot kind-weak"></span>
+            <span>仅弱认识</span>
+            <span class="hint">点头之交，需先重新建立关系</span>
+          </div>
+          <template x-for="(p, idx) in weak" :key="'w'+p.target_id">
+            <div class="path-row path-row-weak"
+                 :class="{ 'is-active': activePathKey === 'w'+p.target_id }"
+                 @click="highlightPath(p, 'w'+p.target_id)">
+              <span class="rank" x-text="String(idx + 1).padStart(2, '0')"></span>
+              <div class="body">
+                <div class="name-line">
+                  <span class="name" x-text="p.target_name"></span>
+                  <span class="kind-chip kind-chip-weak">弱</span>
+                </div>
+                <div class="path-context" x-text="pathContextLine(p)"></div>
+              </div>
+              <span class="score" x-text="p.combined_score.toFixed(2)"></span>
+            </div>
+          </template>
+        </div>
+      </template>
+    </div>
+  </template>
+
+  <template x-if="focusSummary && viewMode === 'focus' && !detail">
+    <div class="panel panel-focus">
+      <div class="focus-header">
+        <div class="avatar"
+             :style="`background:${focusSummary.color}20; color:${focusSummary.color}; border-color:${focusSummary.color}40;`"
+             x-text="focusSummary.name.charAt(0)"></div>
+        <div>
+          <div class="name" x-text="focusSummary.name"></div>
+          <div class="industry" x-text="focusSummary.industry"></div>
+        </div>
+      </div>
+      <template x-if="focusSummary.strength">
+        <div class="focus-row">
+          <span>关系强度</span>
+          <span class="mono" x-text="`${focusSummary.strength}/5`"></span>
+        </div>
+      </template>
+      <div class="focus-copy" x-text="focusSummary.snippet"></div>
+      <div class="focus-reason" x-text="focusSummary.reason"></div>
+      <div class="focus-row">
+        <span>局部关系</span>
+        <span class="mono" x-text="`${focusSummary.neighborCount} 个邻居`"></span>
+      </div>
+      <div class="detail-actions">
+        <button class="btn" @click="focusNode(focusSummary.id)">查看资料</button>
+      </div>
+    </div>
+  </template>
+
+  <!-- ========== Detail panel ========== -->
+  <template x-if="detail">
+    <div class="panel panel-detail">
+      <button class="close" @click="clearDetail()">
+        <svg width="12" height="12"><use href="#i-close"/></svg>
+      </button>
+      <div class="detail-header">
+        <div class="avatar"
+             :style="`background:${detail.color}20; color:${detail.color}; border-color:${detail.color}40;`"
+             x-text="detail.name.charAt(0)"></div>
+        <div>
+          <div class="name" x-text="detail.name"></div>
+          <div class="industry" x-text="detail.industry"></div>
+        </div>
+      </div>
+
+      <template x-if="detail.strength_to_me">
+        <div class="detail-section">
+          <div class="label">可信度</div>
+          <div class="bars">
+            <template x-for="i in 5" :key="i">
+              <div class="bar" :class="i <= detail.strength_to_me ? 'on' : ''"></div>
+            </template>
+          </div>
+        </div>
+      </template>
+
+      <template x-if="detail.bio">
+        <div class="detail-section">
+          <div class="label">简介</div>
+          <div class="value" x-text="detail.bio"></div>
+        </div>
+      </template>
+
+      <template x-if="detail.tags && detail.tags.length">
+        <div class="detail-section">
+          <div class="label">标签</div>
+          <div>
+            <template x-for="t in detail.tags" :key="t">
+              <span class="tag" x-text="t"></span>
+            </template>
+          </div>
+        </div>
+      </template>
+
+      <template x-if="detail.skills && detail.skills.length">
+        <div class="detail-section">
+          <div class="label">技能</div>
+          <div>
+            <template x-for="t in detail.skills" :key="t">
+              <span class="tag skill" x-text="t"></span>
+            </template>
+          </div>
+        </div>
+      </template>
+
+      <template x-if="detail.companies && detail.companies.length">
+        <div class="detail-section">
+          <div class="label">公司</div>
+          <div class="value" x-text="detail.companies.join(' · ')"></div>
+        </div>
+      </template>
+
+      <template x-if="detail.cities && detail.cities.length">
+        <div class="detail-section">
+          <div class="label">城市</div>
+          <div class="value" x-text="detail.cities.join(' · ')"></div>
+        </div>
+      </template>
+
+      <template x-if="detail.needs && detail.needs.length">
+        <div class="detail-section">
+          <div class="label">需求</div>
+          <div>
+            <template x-for="t in detail.needs" :key="t">
+              <span class="tag need" x-text="t"></span>
+            </template>
+          </div>
+        </div>
+      </template>
+
+      <template x-if="detail.notes">
+        <div class="detail-section">
+          <div class="label">私人备注</div>
+          <div class="value" x-text="detail.notes"></div>
+        </div>
+      </template>
+
+      <template x-if="detail.related && detail.related.length">
+        <div class="detail-section">
+          <div class="label" x-text="`关系 · ${detail.related.length}`"></div>
+          <template x-for="r in detail.related" :key="r.id">
+            <div class="related-row" @click="focusNode(r.id)">
+              <span x-text="r.name"></span>
+              <span class="strength" x-text="`${r.strength}/5`"></span>
+            </div>
+          </template>
+        </div>
+      </template>
+
+      <template x-if="!detail.is_me">
+        <div class="detail-actions">
+          <button class="btn" @click="enterTwoPerson(); pathStart = detail; clearDetail()"
+                  title="把此人作为路径起点">设为起点</button>
+          <button class="btn danger" @click="deleteCurrent()">删除</button>
+        </div>
+      </template>
+    </div>
+  </template>
+
+  <!-- ========== Stats panel ========== -->
+  <template x-if="stats && showStats">
+    <div class="panel panel-stats">
+      <h3>数据概览
+        <button class="close" @click="showStats = false">
+          <svg width="12" height="12"><use href="#i-close"/></svg>
+        </button>
+      </h3>
+      <div class="stat-grid">
+        <div class="stat">
+          <div class="num" x-text="stats.total_contacts"></div>
+          <div class="lbl">Contacts</div>
+        </div>
+        <div class="stat">
+          <div class="num" x-text="stats.total_relationships"></div>
+          <div class="lbl">Relations</div>
+        </div>
+      </div>
+      <div id="stats-chart"></div>
+    </div>
+  </template>
+
+  <!-- ========== Add modal ========== -->
+  <template x-if="showAdd">
+    <div class="modal-bg" @click.self="showAdd = false">
+      <div class="modal">
+        <h2>新增联系人</h2>
+        <p>添加到你的人脉图。简介会用于语义检索。</p>
+        <div class="field">
+          <label>姓名 <span style="color:var(--danger)">*</span></label>
+          <input type="text" x-model="newPerson.name" placeholder="必填">
+        </div>
+        <div class="field">
+          <label>简介</label>
+          <textarea x-model="newPerson.bio"
+                    placeholder="一段话描述这个人，会用于语义检索"></textarea>
+        </div>
+        <div class="field">
+          <label>标签（; 或 , 分隔）</label>
+          <input type="text" x-model="newPerson.tags"
+                 placeholder="例如：私募基金;投资人;靠谱">
+        </div>
+        <div class="field">
+          <label>技能</label>
+          <input type="text" x-model="newPerson.skills" placeholder="量化策略;风控">
+        </div>
+        <div class="field">
+          <label>公司</label>
+          <input type="text" x-model="newPerson.companies" placeholder="某某资管">
+        </div>
+        <div class="field">
+          <label>城市</label>
+          <input type="text" x-model="newPerson.cities" placeholder="上海">
+        </div>
+        <div class="field">
+          <label>需求（此人在找什么）</label>
+          <input type="text" x-model="newPerson.needs" placeholder="客户资源;一级项目">
+        </div>
+        <div class="field">
+          <label>私人备注</label>
+          <textarea x-model="newPerson.notes" placeholder="只你能看见"></textarea>
+        </div>
+        <div class="field">
+          <label>关系</label>
+          <div style="display:flex; gap: 8px;">
+            <select x-model="newPerson.strength_to_me" style="flex: 0 0 108px;">
+              <option value="1">1 · 远</option>
+              <option value="2">2</option>
+              <option value="3">3 · 中</option>
+              <option value="4">4</option>
+              <option value="5">5 · 近</option>
+            </select>
+            <select x-model="newPerson.frequency" style="flex: 0 0 108px;">
+              <option value="weekly">每周</option>
+              <option value="monthly">每月</option>
+              <option value="quarterly">每季</option>
+              <option value="yearly">每年</option>
+              <option value="rare">极少</option>
+            </select>
+            <input type="text" x-model="newPerson.relation_context"
+                   placeholder="如何认识 / 关系上下文" style="flex: 1;">
+          </div>
+        </div>
+        <div class="field">
+          <label style="display: flex; align-items: center; gap: 8px; text-transform: none; letter-spacing: 0;">
+            <input type="checkbox" x-model="newPerson.embed" style="width:auto;">
+            <span style="color: var(--text-secondary); font-size: 12px;">立即生成 embedding（需 API key）</span>
+          </label>
+        </div>
+        <div class="modal-actions">
+          <button class="btn" @click="showAdd = false">取消</button>
+          <button class="btn primary" @click="submitAdd()">保存</button>
+        </div>
+      </div>
+    </div>
+  </template>
+
+  <!-- ========== Introductions modal ========== -->
+  <template x-if="showIntros">
+    <div class="modal-bg" @click.self="showIntros = false">
+      <div class="modal">
+        <h2>引荐推荐</h2>
+        <p>基于「需求 ↔ 标签 / 技能 / 公司」匹配。你可以把 A 介绍给 B，让双方产生价值。</p>
+        <template x-if="introductions.length === 0">
+          <div class="empty">暂时没有匹配。给联系人补充「需求」字段会更准确。</div>
+        </template>
+        <template x-for="s in introductions" :key="s.provider_id + '-' + s.seeker_id">
+          <div class="path-row" @click="showIntroPair(s.provider_id, s.seeker_id)">
+            <span class="rank">⇌</span>
+            <div class="body">
+              <div class="name" x-text="`${s.seeker_name}  ⇌  ${s.provider_name}`"></div>
+              <div class="meta" x-text="s.why"></div>
+            </div>
+          </div>
+        </template>
+        <div class="modal-actions">
+          <button class="btn" @click="showIntros = false">关闭</button>
+        </div>
+      </div>
+    </div>
+  </template>
+
+  <!-- ========== Help overlay ========== -->
+  <template x-if="showHelp">
+    <div class="help-overlay" @click.self="showHelp = false">
+      <div class="help-card">
+        <h2>快捷键</h2>
+        <div class="row"><span class="kbd">/</span><span class="desc">聚焦搜索框</span></div>
+        <div class="row"><span class="kbd">Enter</span><span class="desc">或点击「查询」执行搜索</span></div>
+        <div class="row"><span class="kbd">N</span><span class="desc">新增联系人</span></div>
+        <div class="row"><span class="kbd">F</span><span class="desc">全屏 / 退出</span></div>
+        <div class="row"><span class="kbd">Esc</span><span class="desc">清除高亮 / 关闭面板</span></div>
+        <div class="row"><span class="kbd">?</span><span class="desc">显示此帮助</span></div>
+        <hr style="border: 0; border-top: 1px solid var(--border); margin: 16px 0;">
+        <h2>交互</h2>
+        <div class="row"><span class="desc">· 鼠标悬停节点 → 邻居扩散</span></div>
+        <div class="row"><span class="desc">· 点击节点 → 打开详情</span></div>
+        <div class="row"><span class="desc">· 滚轮缩放，拖拽平移</span></div>
+        <div class="row"><span class="desc">· 双人路径：依次点击两点</span></div>
+        <div class="row"><span class="desc">· 引荐：自动扫描需求-能力匹配</span></div>
+        <div class="modal-actions">
+          <button class="btn primary" @click="showHelp = false">明白</button>
+        </div>
+      </div>
+    </div>
+  </template>
+
+  <!-- ========== Toast ========== -->
+  <template x-if="toast">
+    <div class="toast" :class="toast.type === 'error' ? 'error' : ''" x-text="toast.msg"></div>
+  </template>
+
+  <!-- Floating toggle chips to re-open closed panels -->
+  <template x-if="!showFilters">
+    <button class="floating-toggle"
+            style="top: 64px; left: 18px;"
+            @click="showFilters = true">
+      <svg class="ico" width="13" height="13"><use href="#i-filter"/></svg>
+      <span>过滤</span>
+    </button>
+  </template>
+  <template x-if="!showStats && stats">
+    <button class="floating-toggle"
+            style="bottom: 18px; right: 18px;"
+            @click="showStats = true; $nextTick(() => renderChart())">
+      <svg class="ico" width="13" height="13"><use href="#i-chart"/></svg>
+      <span>数据</span>
+    </button>
+  </template>
+
+</body>
+</html>

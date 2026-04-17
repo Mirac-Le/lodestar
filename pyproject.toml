@@ -1,0 +1,78 @@
+[project]
+name = "lodestar"
+version = "0.1.0"
+description = "A personal network navigator — tell it what you want to do, it finds the optimal path through your contacts."
+readme = "README.md"
+requires-python = ">=3.12"
+authors = [{ name = "quant002", email = "2876254887@qq.com" }]
+license = { text = "MIT" }
+keywords = ["personal-crm", "contacts", "network", "graph", "path-finding", "semantic-search"]
+dependencies = [
+    "typer>=0.12",
+    "rich>=13.7",
+    "pydantic>=2.7",
+    "pydantic-settings>=2.3",
+    "networkx>=3.3",
+    "sqlite-vec>=0.1.6",
+    "polars>=1.0",
+    "openai>=1.40",
+    "python-dotenv>=1.0",
+    "platformdirs>=4.2",
+    "httpx>=0.27",
+    "fastexcel>=0.19.0",
+    "pyvis>=0.3.2",
+    "fastapi>=0.136.0",
+    "uvicorn[standard]>=0.44.0",
+]
+
+[project.optional-dependencies]
+viz = [
+    "pyvis>=0.3.2",
+]
+
+[project.scripts]
+lodestar = "lodestar.cli:app"
+
+[dependency-groups]
+dev = [
+    "pytest>=8.2",
+    "pytest-cov>=5.0",
+    "ruff>=0.5",
+    "mypy>=1.10",
+    "types-networkx>=3.3",
+    "xlsxwriter>=3.2.9",
+    "httpx>=0.28.1",
+]
+
+[build-system]
+requires = ["uv_build>=0.9.18,<0.10.0"]
+build-backend = "uv_build"
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "B", "UP", "N", "C4", "SIM", "RUF"]
+# RUF001/RUF002/RUF003: "ambiguous" fullwidth punctuation — intentional
+# when parsing / matching Chinese Excel column names and separators.
+ignore = ["E501", "RUF001", "RUF002", "RUF003"]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/*" = ["B011", "N802"]
+# FastAPI uses `Depends(...)` in default args as its canonical injection pattern.
+"src/lodestar/web/app.py" = ["B008"]
+
+[tool.mypy]
+python_version = "3.12"
+strict = true
+warn_unused_ignores = true
+warn_return_any = true
+
+[[tool.mypy.overrides]]
+module = ["sqlite_vec.*", "pyvis.*"]
+ignore_missing_imports = true
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-ra -q --strict-markers"

@@ -1,0 +1,56 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+.venv/
+venv/
+env/
+build/
+dist/
+*.egg-info/
+*.egg
+pip-wheel-metadata/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+.coverage.*
+coverage.xml
+htmlcov/
+.tox/
+.nox/
+.hypothesis/
+
+# uv / tooling
+.python-version.local
+# keep .python-version + uv.lock committed for reproducible installs
+
+# Project data & secrets
+*.db
+*.db-journal
+*.db-wal
+*.db-shm
+*.sqlite
+*.sqlite3
+data/
+.env
+.env.*
+!.env.example
+
+# Logs & local artifacts
+*.log
+*.tmp
+.cache/
+
+# IDE / OS
+.vscode/
+.idea/
+*.swp
+*~
+.DS_Store
+Thumbs.db
+
+# Cursor — local hook state / transcript index (no secrets, but machine-specific)
+.cursor/hooks/state/
