@@ -494,6 +494,14 @@ button { cursor: pointer; }
   color: #9aa0aa;
   border: 1px solid rgba(108,114,128,0.32);
 }
+/* Wishlist is a curation flag, NOT a tie-strength signal — keep it visually
+   distinct from the kind chips so users can read "this person is on your
+   shortlist" independently of "how do I reach them". */
+.kind-chip-wishlist {
+  background: rgba(180,160,210,0.12);
+  color: #c2b3d8;
+  border: 1px solid rgba(180,160,210,0.30);
+}
 
 .path-row.is-active {
   background: var(--bg-overlay);

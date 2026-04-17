@@ -79,6 +79,51 @@ def test_search_keyword_only(client: TestClient) -> None:
     assert data["goal"] == "私募"
     names = [p["target_name"] for p in data["results"]]
     assert "Alice" in names
+    # New bucket layout: keep the indirect alias and surface the topology
+    # buckets explicitly. `targets` is kept transitionally and must mirror
+    # `indirect` exactly so older clients keep working.
+    assert "indirect" in data and "direct" in data and "weak" in data
+    assert "wishlist" in data
+    assert data["targets"] == data["indirect"]
+
+
+def test_wishlist_flag_is_decoupled_from_path_kind(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A wishlist contact should be allowed to also be a 1-hop direct contact:
+    is_wishlist is curation, path_kind is topology, and they must not collapse
+    into one another."""
+    db = tmp_path / "wish.db"
+    test_settings = Settings(
+        db_path=db, embedding_dim=8,
+        llm_api_key="x", embedding_api_key="x",
+    )
+    monkeypatch.setattr("lodestar.config.get_settings", lambda: test_settings)
+    monkeypatch.setattr("lodestar.web.app.get_settings", lambda: test_settings)
+
+    conn = connect(db)
+    init_schema(conn, embedding_dim=8)
+    repo = Repository(conn)
+    me = repo.ensure_me("我")
+    star = repo.add_person(Person(
+        name="Star", bio="量化研究员",
+        tags=["私募"], is_wishlist=True,
+    ))
+    assert me.id and star.id
+    repo.add_relationship(Relationship(
+        source_id=me.id, target_id=star.id, strength=4,
+    ))
+    conn.close()
+
+    client = TestClient(create_app())
+    r = client.post("/api/search", json={"goal": "私募", "no_llm": True})
+    assert r.status_code == 200
+    data = r.json()
+    star_row = next(p for p in data["results"] if p["target_name"] == "Star")
+    assert star_row["path_kind"] == "direct"
+    assert star_row["is_wishlist"] is True
+    # Star also appears in the dedicated wishlist bucket.
+    assert any(p["target_name"] == "Star" for p in data["wishlist"])
 
 
 def test_two_person_path(client: TestClient) -> None:

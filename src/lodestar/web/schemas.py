@@ -17,6 +17,7 @@ class GraphNode(BaseModel):
     glow: str
     size: int
     is_me: bool
+    is_wishlist: bool = False
     strength_to_me: int | None = None
     bio: str | None = None
     tags: list[str] = []
@@ -61,9 +62,10 @@ class PathResultDTO(BaseModel):
     path_strength: float
     combined_score: float
     rationale: str
-    path_kind: str = "direct"  # 'direct' | 'weak' | 'target'
-    edge_ids: list[str] = []   # graph edges making up this single path
-    node_ids: list[int] = []   # graph nodes making up this single path
+    path_kind: str = "direct"      # 'direct' | 'weak' | 'indirect' (topology only)
+    is_wishlist: bool = False      # user-curated "I want to know them" marker
+    edge_ids: list[str] = []       # graph edges making up this single path
+    node_ids: list[int] = []       # graph nodes making up this single path
 
 
 class SearchRequest(BaseModel):
@@ -76,10 +78,14 @@ class SearchResponse(BaseModel):
     goal: str
     intent_summary: str
     intent_keywords: list[str]
-    results: list[PathResultDTO]               # legacy combined list (kept)
-    targets: list[PathResultDTO] = []          # multi-hop paths to introduce
+    results: list[PathResultDTO]               # combined list, sorted by combined_score
+    indirect: list[PathResultDTO] = []         # multi-hop paths via intermediaries
     direct: list[PathResultDTO] = []           # 1-hop strong contacts
     weak: list[PathResultDTO] = []             # 1-hop weak acquaintances
+    wishlist: list[PathResultDTO] = []         # any kind, but is_wishlist=True
+    # Deprecated alias kept for one release so older clients still parse.
+    # Mirrors `indirect`. Will be removed in a follow-up.
+    targets: list[PathResultDTO] = []
     highlighted_node_ids: list[int]
     highlighted_edge_ids: list[str]
 
@@ -127,6 +133,7 @@ class CreatePersonRequest(BaseModel):
     companies: list[str] = []
     cities: list[str] = []
     needs: list[str] = []
+    is_wishlist: bool = False
     strength_to_me: int = Field(default=3, ge=1, le=5)
     relation_context: str | None = None
     frequency: Frequency = Frequency.YEARLY
@@ -141,6 +148,7 @@ class UpdatePersonRequest(BaseModel):
     companies: list[str] | None = None
     cities: list[str] | None = None
     needs: list[str] | None = None
+    is_wishlist: bool | None = None
     embed: bool = False
 
 
@@ -150,6 +158,7 @@ class PersonDTO(BaseModel):
     bio: str | None = None
     notes: str | None = None
     is_me: bool
+    is_wishlist: bool = False
     industry: str
     color: str
     glow: str
@@ -167,6 +176,7 @@ class PersonDTO(BaseModel):
         assert p.id is not None
         return cls(
             id=p.id, name=p.name, bio=p.bio, notes=p.notes, is_me=p.is_me,
+            is_wishlist=p.is_wishlist,
             industry=industry, color=color, glow=glow,
             strength_to_me=strength_to_me,
             tags=p.tags, skills=p.skills, companies=p.companies,

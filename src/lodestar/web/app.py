@@ -90,6 +90,7 @@ def _to_graph_node(p: Person, strength_to_me: int | None) -> GraphNode:
     return GraphNode(
         id=p.id, label=p.name, industry=industry,
         color=color, glow=glow, size=size, is_me=p.is_me,
+        is_wishlist=p.is_wishlist,
         strength_to_me=strength_to_me,
         bio=p.bio, tags=p.tags, skills=p.skills,
         companies=p.companies, cities=p.cities,
@@ -125,6 +126,7 @@ def _path_result_to_dto(r: PathResult) -> PathResultDTO:
         combined_score=r.combined_score,
         rationale=r.rationale,
         path_kind=r.path_kind,
+        is_wishlist=r.target.is_wishlist,
         node_ids=node_ids,
         edge_ids=edge_ids,
     )
@@ -235,28 +237,41 @@ def create_app() -> FastAPI:
             )
         ranked = PathFinder(repo=repo, max_hops=settings.max_hops).rank(candidates)
 
-        # Bucket by kind. Each bucket is independently truncated so
-        # direct contacts can't crowd targets out of the UI.
-        targets = [r for r in ranked if r.path_kind == "target"][: body.top_k]
+        # Bucket purely by graph topology. Each bucket is independently
+        # truncated so direct contacts can't crowd indirect intros out of
+        # the UI, but no bucket gets a free pass into the autohighlight —
+        # `results` is sorted by combined_score across all buckets so the
+        # client can pick the global best regardless of kind.
+        indirect = [r for r in ranked if r.path_kind == "indirect"][: body.top_k]
         direct = [r for r in ranked if r.path_kind == "direct"][: body.top_k]
         weak = [r for r in ranked if r.path_kind == "weak"][: max(body.top_k - 1, 2)]
 
-        # Legacy `results` field: targets first (most product-relevant), then
-        # the rest, capped by top_k for clients that haven't moved off it yet.
-        legacy = (targets + direct + weak)[: body.top_k]
+        wishlist = [r for r in ranked if r.target.is_wishlist][: body.top_k]
 
-        nodes, edges = _highlighted_elements(legacy)
-        targets_dto = [_path_result_to_dto(r) for r in targets]
+        # Combined list = global ranking (already sorted by combined_score).
+        # Truncate after merging buckets so we keep the strongest survivors.
+        bucket_union = {id(r): r for r in (indirect + direct + weak)}
+        combined = sorted(
+            bucket_union.values(),
+            key=lambda r: r.combined_score,
+            reverse=True,
+        )[: body.top_k]
+
+        nodes, edges = _highlighted_elements(combined)
+        indirect_dto = [_path_result_to_dto(r) for r in indirect]
         direct_dto = [_path_result_to_dto(r) for r in direct]
         weak_dto = [_path_result_to_dto(r) for r in weak]
+        wishlist_dto = [_path_result_to_dto(r) for r in wishlist]
         return SearchResponse(
             goal=body.goal,
             intent_summary=intent.summary or body.goal,
             intent_keywords=intent.keywords,
-            results=[_path_result_to_dto(r) for r in legacy],
-            targets=targets_dto,
+            results=[_path_result_to_dto(r) for r in combined],
+            indirect=indirect_dto,
             direct=direct_dto,
             weak=weak_dto,
+            wishlist=wishlist_dto,
+            targets=indirect_dto,  # deprecated alias
             highlighted_node_ids=nodes,
             highlighted_edge_ids=edges,
         )
@@ -313,6 +328,7 @@ def create_app() -> FastAPI:
             name=body.name, bio=body.bio, notes=body.notes,
             tags=body.tags, skills=body.skills, companies=body.companies,
             cities=body.cities, needs=body.needs,
+            is_wishlist=body.is_wishlist,
         )
         saved = repo.add_person(person)
         assert saved.id is not None
@@ -355,6 +371,8 @@ def create_app() -> FastAPI:
             existing.cities = body.cities
         if body.needs is not None:
             existing.needs = body.needs
+        if body.is_wishlist is not None:
+            existing.is_wishlist = body.is_wishlist
         updated = repo.update_person(existing)
         if body.embed and updated.bio:
             try:

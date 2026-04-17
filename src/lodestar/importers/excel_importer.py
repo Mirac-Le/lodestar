@@ -342,6 +342,13 @@ class ExcelImporter:
         if not name:
             return False
 
+        # Decide whether (and how) to build the Me → Person edge.
+        kind_raw = (
+            _cell(row.get(self._mapping.kind_column)) if self._mapping.kind_column else ""
+        )
+        kind = _normalize_kind(kind_raw)
+        is_wishlist_row = kind == _KIND_TARGET
+
         person = Person(
             name=name,
             bio=self._resolve_bio(row),
@@ -351,6 +358,7 @@ class ExcelImporter:
             companies=self._collect_attribute(row, self._mapping.companies),
             cities=self._collect_attribute(row, self._mapping.cities),
             needs=self._collect_attribute(row, self._mapping.needs),
+            is_wishlist=is_wishlist_row,
         )
 
         existing = self._repo.find_person_by_name(name)
@@ -365,20 +373,19 @@ class ExcelImporter:
             person.companies = _merge_lists(existing.companies, person.companies)
             person.cities = _merge_lists(existing.cities, person.cities)
             person.needs = _merge_lists(existing.needs, person.needs)
+            # Wishlist is sticky: once a row marks someone as a wishlist
+            # contact, a later non-wishlist row should not silently drop it.
+            person.is_wishlist = existing.is_wishlist or is_wishlist_row
             saved = self._repo.update_person(person)
         else:
             saved = self._repo.add_person(person)
 
         assert saved.id is not None
 
-        # Decide whether (and how) to build the Me → Person edge.
-        kind_raw = (
-            _cell(row.get(self._mapping.kind_column)) if self._mapping.kind_column else ""
-        )
-        kind = _normalize_kind(kind_raw)
         if kind == _KIND_TARGET:
-            # Target = someone the user does NOT directly know. They can
-            # only be reached via peers' `认识` references in pass 2.
+            # Wishlist contacts have NO Me-edge; they are reachable only via
+            # peers' `认识` references in pass 2. The is_wishlist flag is
+            # already persisted above and is now decoupled from path topology.
             return True
 
         if kind == _KIND_WEAK:

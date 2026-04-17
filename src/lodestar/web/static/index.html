@@ -153,13 +153,13 @@
   </div>
 
   <!-- ========== Top paths panel ========== -->
-  <template x-if="(targets.length + direct.length + weak.length) > 0 && viewMode === 'intent'">
+  <template x-if="(indirect.length + direct.length + weak.length) > 0 && viewMode === 'intent'">
     <div class="panel panel-paths">
       <h3 x-text="pathMode ? '双人路径' : '引荐路径'">引荐路径
         <span class="ct"
               x-text="pathMode
-                ? `${targets.length} 条候选 · 已按强度排序`
-                : `${targets.length} 目标 · ${direct.length} 直接 · ${weak.length} 弱认识`"></span>
+                ? `${indirect.length} 条候选 · 已按强度排序`
+                : `${direct.length} 直接 · ${weak.length} 弱认识 · ${indirect.length} 需引荐${wishlist.length ? ` · ${wishlist.length} 心愿` : ''}`"></span>
         <button class="close" @click="clearSearch()">
           <svg width="12" height="12"><use href="#i-close"/></svg>
         </button>
@@ -168,18 +168,18 @@
         <span class="intent-chip" x-text="`→ ${intent}`"></span>
       </div>
 
-      <!-- 目标人物（多跳引荐 / 双人路径候选） -->
-      <template x-if="targets.length > 0">
+      <!-- 需引荐（多跳路径 / 双人路径候选） -->
+      <template x-if="indirect.length > 0">
         <div class="path-section">
           <div class="path-section-head">
             <span class="kind-dot kind-target"></span>
-            <span x-text="pathMode ? '可行路径' : '推荐引荐目标'"></span>
+            <span x-text="pathMode ? '可行路径' : '需要引荐的人'"></span>
             <span class="hint"
                   x-text="pathMode
                     ? `从 ${pairLabels && pairLabels.start} 到 ${pairLabels && pairLabels.end}，点击切换`
-                    : '圈内有人能引荐到的人物'"></span>
+                    : '圈内有人可代为引荐'"></span>
           </div>
-          <template x-for="(p, idx) in targets" :key="'t-'+idx+'-'+p.target_id">
+          <template x-for="(p, idx) in indirect" :key="'t-'+idx+'-'+p.target_id">
             <div class="path-row path-row-target"
                  :class="{ 'is-active': activePathKey === 't-'+idx+'-'+p.target_id }"
                  @click="highlightPath(p, 't-'+idx+'-'+p.target_id)">
@@ -189,6 +189,9 @@
                   <span class="name" x-text="p.target_name"></span>
                   <span class="kind-chip kind-chip-target"
                         x-text="`${p.path.length - 1} 跳`"></span>
+                  <template x-if="p.is_wishlist">
+                    <span class="kind-chip kind-chip-wishlist" title="你标记为心愿联系人">★ 心愿</span>
+                  </template>
                 </div>
                 <div class="path-chain">
                   <template x-for="(s, i) in p.path" :key="i">
@@ -230,6 +233,9 @@
                 <div class="name-line">
                   <span class="name" x-text="p.target_name"></span>
                   <span class="kind-chip kind-chip-direct">直接</span>
+                  <template x-if="p.is_wishlist">
+                    <span class="kind-chip kind-chip-wishlist" title="你标记为心愿联系人">★ 心愿</span>
+                  </template>
                 </div>
                 <div class="path-context" x-text="pathContextLine(p)"></div>
               </div>
@@ -256,6 +262,9 @@
                 <div class="name-line">
                   <span class="name" x-text="p.target_name"></span>
                   <span class="kind-chip kind-chip-weak">弱</span>
+                  <template x-if="p.is_wishlist">
+                    <span class="kind-chip kind-chip-wishlist" title="你标记为心愿联系人">★ 心愿</span>
+                  </template>
                 </div>
                 <div class="path-context" x-text="pathContextLine(p)"></div>
               </div>

@@ -31,8 +31,26 @@ def connect(db_path: str | Path) -> sqlite3.Connection:
 
 
 def init_schema(conn: sqlite3.Connection, embedding_dim: int) -> None:
-    """Create all tables if they don't exist. Idempotent."""
+    """Create all tables if they don't exist, then run lightweight column-add
+    migrations for existing databases. Idempotent."""
     with conn:
         for stmt in DDL_STATEMENTS:
             conn.execute(stmt)
         conn.execute(vec_ddl(embedding_dim))
+        _migrate_in_place(conn)
+
+
+def _migrate_in_place(conn: sqlite3.Connection) -> None:
+    """Add columns introduced after the initial schema.
+
+    SQLite has no `ADD COLUMN IF NOT EXISTS`, so we inspect `PRAGMA
+    table_info` and only ALTER when the column is missing. Each migration
+    must be safe to re-run on already-upgraded databases.
+    """
+    existing_person_cols = {
+        row["name"] for row in conn.execute("PRAGMA table_info(person)")
+    }
+    if "is_wishlist" not in existing_person_cols:
+        conn.execute(
+            "ALTER TABLE person ADD COLUMN is_wishlist INTEGER NOT NULL DEFAULT 0"
+        )

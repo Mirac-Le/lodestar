@@ -88,3 +88,35 @@ def test_needs_are_searchable(repo: Repository, tmp_path: Path) -> None:
     assert li is not None and wang is not None
     assert li.id in hits
     assert wang.id in hits  # '客户多' also matches '客户'
+
+
+def test_kind_target_sets_wishlist_and_skips_me_edge(
+    repo: Repository, tmp_path: Path,
+) -> None:
+    """`关系类型 = 目标` must set Person.is_wishlist=True (curation flag) AND
+    skip the Me-edge (so reach is forced through peers). Earlier the only
+    observable signal was the missing edge — the curation intent was lost."""
+    from lodestar.importers import ExcelImporter, extended_network_preset
+
+    repo.ensure_me(name="我")
+    df = pl.DataFrame({
+        "姓名": ["张三", "心愿一号"],
+        "所属行业": ["私募", "并购投行"],
+        "关系类型": ["直接", "目标"],
+        "可信度（言行一致性0-5分）": [4, 0],
+    })
+    xlsx_path = tmp_path / "wish.xlsx"
+    df.write_excel(xlsx_path)
+
+    ExcelImporter(repo, mapping=extended_network_preset()).import_file(xlsx_path)
+
+    star = repo.find_person_by_name("心愿一号")
+    assert star is not None
+    assert star.is_wishlist is True
+    rels = repo.list_relationships()
+    assert all(r.target_id != star.id for r in rels), \
+        "wishlist contact must NOT have a Me-edge"
+
+    zhang = repo.find_person_by_name("张三")
+    assert zhang is not None
+    assert zhang.is_wishlist is False

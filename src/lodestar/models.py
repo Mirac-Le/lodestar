@@ -28,6 +28,15 @@ class Person(BaseModel):
     bio: str | None = None
     notes: str | None = None
     is_me: bool = False
+    is_wishlist: bool = Field(
+        default=False,
+        description=(
+            "User-curated flag: 'I want to know this person'. Independent "
+            "of graph topology — a wishlist person may or may not already "
+            "have a Me-edge. Search ranking does NOT bias toward wishlist; "
+            "the UI surfaces it as a chip / filter only."
+        ),
+    )
     created_at: datetime | None = None
     updated_at: datetime | None = None
 
@@ -89,10 +98,12 @@ class PathResult(BaseModel):
     path_kind: str = Field(
         default="direct",
         description=(
-            "How the user reaches this target: "
-            "'direct' = 1-hop strong (Me→X strength≥2); "
-            "'weak'   = 1-hop weak (Me→X strength=1, vague acquaintance); "
-            "'target' = needs 2+ hops via intermediaries (no Me-edge)."
+            "Pure graph-topology label for how the user reaches this person: "
+            "'direct'   = 1-hop strong (Me→X strength≥2); "
+            "'weak'     = 1-hop weak (Me→X strength=1, vague acquaintance); "
+            "'indirect' = needs 2+ hops via intermediaries (no Me-edge). "
+            "This is independent of the `is_wishlist` curation flag on the "
+            "target person — a wishlist contact can fall in any bucket."
         ),
     )
 

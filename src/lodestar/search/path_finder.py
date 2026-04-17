@@ -25,15 +25,21 @@ class PathFinder:
     def rank(self, candidates: list[Candidate]) -> list[PathResult]:
         """Score and sort candidates by combined_score, best first.
 
-        Each candidate also receives a `path_kind` label:
+        Each candidate also receives a `path_kind` label that is **purely
+        topological** — it does not encode the user's `is_wishlist`
+        curation, which is carried separately on the Person record:
 
-            direct  -- the user already has a strong (≥2) Me-edge
-            weak    -- the user has a Me-edge but it's strength=1 only
-            target  -- the user has NO Me-edge; reachable only via peers
+            direct   -- 1-hop strong Me-edge (strength ≥ 2)
+            weak     -- 1-hop weak Me-edge (strength = 1)
+            indirect -- no Me-edge; reachable only through intermediaries
 
-        Hops are penalised, but `target` candidates use a softer hop
-        penalty (linear instead of super-linear) because the entire point
-        of a target candidate is the chain through intermediaries.
+        Hop penalty is uniform across all kinds. Earlier versions softened
+        the penalty for the legacy `path_kind=='target'` bucket to keep
+        wishlist intros competitive, but that conflated "rare wishlist
+        contact" with "any peer-of-peer", so a single curated row could
+        monopolise the top result regardless of relevance. Wishlist is
+        now a UI concern only (Person.is_wishlist) — ranking treats every
+        reachable person fairly.
         """
         me = self._repo.get_me()
         if me is None or me.id is None:
@@ -62,12 +68,7 @@ class PathFinder:
             # nudges ranking within the same hop count (≤ ±10 %).
             avg_strength = path_strength / float(hops) if hops else 0.0
             strength_factor = 0.9 + 0.1 * (avg_strength / 5.0)  # 0.9 → 1.0
-
-            # Softer hop penalty for "target" results (whole point is multi-hop).
-            if kind == "target":
-                hop_factor = 1.0 / (float(hops) ** 0.5)
-            else:
-                hop_factor = 1.0 / (float(hops) ** 1.3)
+            hop_factor = 1.0 / (float(hops) ** 1.3)
 
             combined = cand.score * strength_factor * hop_factor
             results.append(
@@ -85,11 +86,11 @@ class PathFinder:
         return results
 
     def _classify_path_kind(self, graph: nx.Graph, me_id: int, pid: int) -> str:
-        """Tag based on the directness of Me's relation to this person."""
+        """Tag based on the topological directness of Me's relation."""
         if pid not in graph or me_id not in graph:
-            return "target"
+            return "indirect"
         if not graph.has_edge(me_id, pid):
-            return "target"
+            return "indirect"
         edge = graph.edges[me_id, pid]
         return "weak" if int(edge.get("strength", 3)) <= 1 else "direct"
 

@@ -498,10 +498,11 @@ function appState() {
     /* ---- data ---- */
     graph: { nodes: [], edges: [], me_id: null },
     detail: null,
-    paths: [],          // legacy combined results
-    targets: [],        // multi-hop introductions (path_kind == 'target')
+    paths: [],          // combined results, sorted by combined_score
+    indirect: [],       // multi-hop introductions (path_kind == 'indirect')
     direct: [],         // 1-hop strong (path_kind == 'direct')
     weak: [],           // 1-hop weak (path_kind == 'weak')
+    wishlist: [],       // any kind, but is_wishlist == true (curation chip)
     activePathKey: null, // which result row is currently highlighted on the graph
     intent: null,
     stats: null,
@@ -662,13 +663,15 @@ function appState() {
         });
         this.intent = resp.intent_summary;
         this.paths = resp.results;
-        this.targets = resp.targets || [];
+        // Tolerate older servers that only know `targets`.
+        this.indirect = resp.indirect || resp.targets || [];
         this.direct = resp.direct || [];
         this.weak = resp.weak || [];
+        this.wishlist = resp.wishlist || [];
         this.pathMode = false;
         this.pairLabels = null;
         const nResults =
-          this.targets.length + this.direct.length + this.weak.length;
+          this.indirect.length + this.direct.length + this.weak.length;
 
         if (nResults === 0) {
           this.activePathKey = null;
@@ -695,11 +698,16 @@ function appState() {
           endpoints: this.paths.map((r) => r.target_id),
         });
 
-        // If we have any target-type result, auto-focus the top target so
-        // the user immediately sees the killer use case (multi-hop intro).
-        if (this.targets.length > 0) {
-          const top = this.targets[0];
-          this.highlightPath(top, 't-0-' + top.target_id);
+        // Auto-focus the GLOBAL Top1 by combined_score, regardless of
+        // bucket. Earlier this preferred `targets[0]` unconditionally,
+        // which let any wishlist-flagged contact monopolise the highlight
+        // even when a direct contact had much higher relevance. The new
+        // rule: whichever person actually scored highest wins the focus,
+        // and a wishlist chip on that row signals the curation status.
+        const top = this.paths[0];
+        if (top) {
+          const key = this._rowKey(top);
+          this.highlightPath(top, key);
         }
         this.pushHistory(q);
       } catch (e) {
@@ -710,12 +718,31 @@ function appState() {
     },
     clearSearch() {
       this.query = ""; this.intent = null;
-      this.paths = []; this.targets = []; this.direct = []; this.weak = [];
+      this.paths = []; this.indirect = []; this.direct = []; this.weak = [];
+      this.wishlist = [];
       this.activePathKey = null;
       this.searchActive = false;
       this.pathMode = false;
       this.pairLabels = null;
       this.enterAmbientMode();
+    },
+
+    /* Stable row key used both by the result list (for `is-active` styling)
+       and by autohighlight. The prefix mirrors the section the row lives in
+       so clicking either the graph or the panel converges on the same key. */
+    _rowKey(p) {
+      const idx = this._rowIndex(p);
+      switch (p.path_kind) {
+        case "indirect": return `t-${idx}-${p.target_id}`;
+        case "weak":     return `w${p.target_id}`;
+        default:         return `d${p.target_id}`;
+      }
+    },
+    _rowIndex(p) {
+      if (p.path_kind === "indirect") {
+        return Math.max(0, this.indirect.findIndex((r) => r.target_id === p.target_id));
+      }
+      return 0;
     },
 
     /* Highlight a SINGLE path on the graph (clicked from results panel). */
@@ -910,9 +937,10 @@ function appState() {
           return;
         }
         this.paths = resp.paths;
-        this.targets = resp.paths;
+        this.indirect = resp.paths;
         this.direct = [];
         this.weak = [];
+        this.wishlist = [];
         this.searchActive = true;
         this.pathMode = true;
         this.pairLabels = {
@@ -1014,9 +1042,10 @@ function appState() {
         next_step: nextStep,
       };
       this.paths = [synthetic];
-      this.targets = [synthetic];
+      this.indirect = [synthetic];
       this.direct = [];
       this.weak = [];
+      this.wishlist = [];
       this.activePathKey = null;
       this.searchActive = true;
       this.pathMode = true;

@@ -19,6 +19,15 @@ def _pack_vector(vec: Sequence[float]) -> bytes:
     return struct.pack(f"{len(vec)}f", *vec)
 
 
+def _row_get(row: sqlite3.Row, key: str, default: Any) -> Any:
+    """sqlite3.Row has no .get(); emulate it for forward-compatible columns
+    that may be absent on databases that pre-date a migration."""
+    try:
+        return row[key]
+    except (IndexError, KeyError):
+        return default
+
+
 class Repository:
     """Data access layer."""
 
@@ -49,8 +58,12 @@ class Repository:
     def add_person(self, person: Person) -> Person:
         with self.conn:
             cur = self.conn.execute(
-                "INSERT INTO person (name, bio, notes, is_me) VALUES (?, ?, ?, ?)",
-                (person.name, person.bio, person.notes, int(person.is_me)),
+                "INSERT INTO person (name, bio, notes, is_me, is_wishlist) "
+                "VALUES (?, ?, ?, ?, ?)",
+                (
+                    person.name, person.bio, person.notes,
+                    int(person.is_me), int(person.is_wishlist),
+                ),
             )
             pid = cur.lastrowid
             assert pid is not None
@@ -63,8 +76,12 @@ class Repository:
         assert person.id is not None, "Cannot update a person without an id"
         with self.conn:
             self.conn.execute(
-                "UPDATE person SET name = ?, bio = ?, notes = ? WHERE id = ?",
-                (person.name, person.bio, person.notes, person.id),
+                "UPDATE person SET name = ?, bio = ?, notes = ?, is_wishlist = ? "
+                "WHERE id = ?",
+                (
+                    person.name, person.bio, person.notes,
+                    int(person.is_wishlist), person.id,
+                ),
             )
             for tbl in (
                 "person_tag",
@@ -128,12 +145,21 @@ class Repository:
             bio=row["bio"],
             notes=row["notes"],
             is_me=bool(row["is_me"]),
+            is_wishlist=bool(_row_get(row, "is_wishlist", 0)),
             tags=tags,
             skills=skills,
             companies=companies,
             cities=cities,
             needs=needs,
         )
+
+    def set_wishlist(self, person_id: int, *, on: bool) -> None:
+        """Toggle the is_wishlist curation flag without disturbing other fields."""
+        with self.conn:
+            self.conn.execute(
+                "UPDATE person SET is_wishlist = ? WHERE id = ?",
+                (1 if on else 0, person_id),
+            )
 
     def _apply_attributes(self, person_id: int, p: Person) -> None:
         def upsert_lookup(table: str, name: str) -> int:
