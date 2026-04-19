@@ -15,6 +15,10 @@
 - Public source: https://github.com/Mirac-Le/lodestar
 - Run the web UI with `uv run lodestar serve` (defaults to `127.0.0.1:8765`; use `--host 0.0.0.0` when others on the LAN need access).
 - SQLite connections for the web app use `check_same_thread=False` with WAL and per-request connections so FastAPI’s thread pool does not trip `ProgrammingError` across threads.
-- Sample and template spreadsheets for imports live under `examples/` (including `pyq.xlsx`, `demo_network.xlsx`, and `template.xlsx`).
+- Sample and template spreadsheets for imports live under `examples/`：
+  - `richard_network.xlsx`（owner `richard` / Richard Teng，原 `pyq.xlsx`）
+  - `tommy_network.xlsx`（owner `tommy` / Tommy Song，原 `contacts.xlsx`，16 列机构合作画像表）
+  - `demo_network.xlsx`（自带 demo 网络，36 个虚构联系人）
+  - `template.xlsx`（发给同事填写的空模板）
 - Stakeholder-facing, objective capability overview (no subjective “心路历程”) lives in `docs/instructions.md`; dated narrative notes stay in `docs/` progress-style files.
 - The tree includes `awesome-design-md/` as an in-repo library of design-system references for UI work.

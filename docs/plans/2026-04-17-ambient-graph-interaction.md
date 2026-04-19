@@ -58,7 +58,7 @@
 
 - Brand
 - Search input
-- Optional helper copy like `输入目标以点亮路径`
+- Optional helper copy like `输入想找谁/想做什么以点亮路径`
 - `Me` node
 - Node size encoding
 
@@ -210,7 +210,7 @@ Keep reopen buttons, but visually downplay them.
 
 Add one quiet helper line near the search input or beneath top bar:
 
-- `输入目标以点亮路径`
+- `输入想找谁/想做什么以点亮路径`
 - or `悬停查看局部关系`
 
 Show this only in ambient mode.
@@ -295,7 +295,7 @@ Do not auto-open the detail panel after search unless the user explicitly select
 For each result, support one short “next step” phrase, for example:
 
 - `先联系 A，请他引荐 B`
-- `你与目标相距 2 跳，优先走强关系节点`
+- `你与候选人相距 2 跳，优先走强关系节点`
 
 If this is not yet returned by the backend, derive it in the frontend from existing path data.
 

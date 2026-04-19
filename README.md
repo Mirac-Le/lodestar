@@ -23,7 +23,7 @@ cp .env.example .env        # fill in your LLM / embedding API key
 uv sync                     # install deps into .venv
 
 uv run lodestar init --name "Your Name"
-uv run lodestar import examples/pyq.xlsx       # .xlsx / .xls / .csv all work
+uv run lodestar import examples/richard_network.xlsx  # .xlsx / .xls / .csv all work
 uv run lodestar find "量化私募" --top 5
 uv run lodestar find "想找政府资源" --top 5
 ```
@@ -116,7 +116,7 @@ Works out-of-the-box with the following columns:
 | `可信度（言行一致性0-5分）`     | `strength` (1-5)                       |
 | `潜在需求`                      | `needs` ← drives reciprocal matching    |
 
-Duplicate rows (same `姓名`) are merged; later rows only add information, never erase. See `examples/pyq.xlsx` for the reference format.
+Duplicate rows (same `姓名`) are merged; later rows only add information, never erase. See `examples/richard_network.xlsx` for the reference format.
 
 For a different Excel schema, construct a `ColumnMapping` and pass it to `ExcelImporter(repo, mapping=...)`.
 
