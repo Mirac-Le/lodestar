@@ -54,3 +54,20 @@ def _migrate_in_place(conn: sqlite3.Connection) -> None:
         conn.execute(
             "ALTER TABLE person ADD COLUMN is_wishlist INTEGER NOT NULL DEFAULT 0"
         )
+
+    existing_rel_cols = {
+        row["name"] for row in conn.execute("PRAGMA table_info(relationship)")
+    }
+    if "owner_id" not in existing_rel_cols:
+        conn.execute(
+            "ALTER TABLE relationship ADD COLUMN owner_id INTEGER "
+            "REFERENCES owner(id) ON DELETE SET NULL"
+        )
+        conn.execute("CREATE INDEX IF NOT EXISTS ix_rel_owner ON relationship(owner_id)")
+    if "source" not in existing_rel_cols:
+        # SQLite ALTER ADD COLUMN cannot add a column with a non-constant
+        # default if it includes a CHECK constraint, so we add the column
+        # with a constant default and skip the CHECK on legacy DBs.
+        conn.execute(
+            "ALTER TABLE relationship ADD COLUMN source TEXT NOT NULL DEFAULT 'manual'"
+        )

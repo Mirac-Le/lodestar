@@ -39,22 +39,106 @@ def _open_repo() -> tuple[Repository, int]:
 # --------------------------------------------------------------------- init
 @app.command()
 def init(
-    name: Annotated[str | None, typer.Option(help="Your own name.")] = None,
+    name: Annotated[str | None, typer.Option(help="Your display name.")] = None,
     bio: Annotated[str | None, typer.Option(help="Short self-description.")] = None,
+    slug: Annotated[
+        str, typer.Option(help="Owner slug (URL-safe). Defaults to 'me'.")
+    ] = "me",
 ) -> None:
-    """Initialize the database and create your own 'me' record."""
+    """Initialize the database and create the first owner.
+
+    Multiple owners can coexist (Richard / Tommy / ...). Use
+    `lodestar owner add` to register additional owners after init.
+    """
     repo, _ = _open_repo()
-    existing = repo.get_me()
+    existing = repo.get_owner_by_slug(slug)
     if existing:
-        console.print(f"[yellow]Already initialized as [cyan]{existing.name}[/cyan].[/yellow]")
+        console.print(
+            f"[yellow]Owner [cyan]{slug}[/cyan] already initialised as "
+            f"[cyan]{existing.display_name}[/cyan].[/yellow]"
+        )
         return
     if name is None:
-        name = Prompt.ask("Your name")
-    me = repo.ensure_me(name=name, bio=bio)
+        name = Prompt.ask("Display name")
+    owner = repo.ensure_owner(slug=slug, display_name=name, bio=bio)
     console.print(
         f"[green]Initialized.[/green] Database: [dim]{get_settings().db_path}[/dim]"
     )
-    console.print(f"[green]You are:[/green] [cyan]{me.name}[/cyan] (id={me.id})")
+    console.print(
+        f"[green]Owner:[/green] [cyan]{owner.display_name}[/cyan] "
+        f"(slug={owner.slug}, me_id={owner.me_person_id})"
+    )
+
+
+# --------------------------------------------------------------- owner mgmt
+owner_app = typer.Typer(
+    name="owner",
+    help="Manage network owners (each gets their own `me` and subgraph).",
+    no_args_is_help=True,
+)
+app.add_typer(owner_app, name="owner")
+
+
+@owner_app.command("add")
+def owner_add(
+    slug: Annotated[str, typer.Argument(help="URL-safe slug, e.g. 'tommy'.")],
+    display: Annotated[str, typer.Option("--display", help="Display name shown in the UI.")],
+    bio: Annotated[str | None, typer.Option(help="Optional self-description for `me`.")] = None,
+    color: Annotated[
+        str | None, typer.Option(help="Optional accent hex color, e.g. '#7a8b9c'.")
+    ] = None,
+) -> None:
+    """Register a new owner (creates their `me` person row)."""
+    repo, _ = _open_repo()
+    if repo.get_owner_by_slug(slug):
+        console.print(f"[yellow]Owner [cyan]{slug}[/cyan] already exists.[/yellow]")
+        return
+    owner = repo.ensure_owner(
+        slug=slug, display_name=display, bio=bio, accent_color=color
+    )
+    console.print(
+        f"[green]Owner added:[/green] [cyan]{owner.display_name}[/cyan] "
+        f"(slug={owner.slug}, me_id={owner.me_person_id})"
+    )
+
+
+@owner_app.command("list")
+def owner_list() -> None:
+    """List all owners."""
+    repo, _ = _open_repo()
+    owners = repo.list_owners()
+    if not owners:
+        console.print("[dim]No owners yet. Run `lodestar init` to create one.[/dim]")
+        return
+    table = Table(title=f"Owners ({len(owners)})")
+    table.add_column("Slug", style="cyan")
+    table.add_column("Display name")
+    table.add_column("Me ID", justify="right")
+    table.add_column("Contacts", justify="right")
+    for o in owners:
+        n = len(repo.list_people(owner_id=o.id))
+        table.add_row(o.slug, o.display_name, str(o.me_person_id), str(n))
+    console.print(table)
+
+
+# -------------------------------------------------------------------- reset
+@app.command()
+def reset(
+    yes: Annotated[bool, typer.Option("--yes", "-y", help="Skip confirmation.")] = False,
+) -> None:
+    """Wipe the entire database file. Useful when reshaping schema or seeding demo data."""
+    settings = get_settings()
+    db_path = Path(settings.db_path)
+    if not db_path.exists():
+        console.print(f"[dim]No database at {db_path}.[/dim]")
+        return
+    if not yes and not Confirm.ask(f"Delete [red]{db_path}[/red]?"):
+        return
+    for suffix in ("", "-wal", "-shm"):
+        p = Path(str(db_path) + suffix)
+        if p.exists():
+            p.unlink()
+    console.print(f"[green]Removed[/green] {db_path} (and WAL/SHM siblings).")
 
 
 # ---------------------------------------------------------------- add person
@@ -234,36 +318,85 @@ def import_spreadsheet(
     preset: Annotated[
         str,
         typer.Option(
-            help="Column preset: 'extended' (default, reads 公司/城市/认识), "
-                 "or 'finance' (legacy pyq.xlsx).",
+            help=(
+                "Column preset: 'extended' (default, reads 公司/城市/认识), "
+                "'richard' (Richard 的 8 列 richard_network.xlsx), or "
+                "'tommy' (Tommy 的 16 列 tommy_network.xlsx)."
+            ),
         ),
     ] = "extended",
+    owner: Annotated[
+        str | None,
+        typer.Option(
+            "--owner",
+            help="Owner slug to attribute these contacts to. Defaults to the first owner.",
+        ),
+    ] = None,
 ) -> None:
     """Bulk-import contacts. Format auto-detected by file extension."""
     from lodestar.importers import (
-        chinese_finance_preset,
         extended_network_preset,
+        richard_finance_preset,
+        tommy_contacts_preset,
     )
 
+    preset_map = {
+        "extended": extended_network_preset,
+        "richard": richard_finance_preset,
+        "tommy": tommy_contacts_preset,
+        # Backwards-compatible alias for anyone still typing the old name.
+        # Safe to remove once nobody is on the v0.1 CLI anymore.
+        "finance": richard_finance_preset,
+    }
+
     repo, _ = _open_repo()
+
+    # Resolve owner; we MUST have one because every contact needs to be
+    # attached via person_owner so it shows up in that owner's tab.
+    owner_obj = repo.get_owner_by_slug(owner) if owner else None
+    if owner_obj is None:
+        owners = repo.list_owners()
+        if not owners:
+            console.print(
+                "[red]No owners exist. Run `lodestar init` (or `lodestar owner add`) first.[/red]"
+            )
+            raise typer.Exit(code=1)
+        if owner is not None:
+            console.print(f"[red]Owner '{owner}' not found.[/red]")
+            raise typer.Exit(code=1)
+        owner_obj = owners[0]
+        console.print(
+            f"[dim]No --owner given; using first owner [cyan]{owner_obj.slug}[/cyan].[/dim]"
+        )
+
     suffix = path.suffix.lower()
     if suffix in {".xlsx", ".xls", ".xlsm"}:
-        mapping = (
-            extended_network_preset()
-            if preset == "extended"
-            else chinese_finance_preset()
+        if preset not in preset_map:
+            console.print(
+                f"[red]Unknown preset '{preset}'. Choose one of: "
+                f"{', '.join(preset_map)}.[/red]"
+            )
+            raise typer.Exit(code=1)
+        mapping = preset_map[preset]()
+        xl = ExcelImporter(
+            repo, mapping=mapping,
+            infer_colleagues=infer_colleagues,
+            owner_id=owner_obj.id,
         )
-        xl = ExcelImporter(repo, mapping=mapping, infer_colleagues=infer_colleagues)
         stats = xl.import_with_stats(path)
         console.print(
             f"[green]Imported[/green] {stats.people} contacts · "
             f"{stats.peer_edges} peer edges (from 认识/关系) · "
             f"{stats.colleague_edges} colleague edges (inferred) "
+            f"into owner [cyan]{owner_obj.slug}[/cyan] "
             f"from [cyan]{path.name}[/cyan]."
         )
     elif suffix == ".csv":
-        count = CSVImporter(repo).import_file(path)
-        console.print(f"[green]Imported[/green] {count} contacts from {path.name}.")
+        count = CSVImporter(repo, owner_id=owner_obj.id).import_file(path)
+        console.print(
+            f"[green]Imported[/green] {count} contacts into owner "
+            f"[cyan]{owner_obj.slug}[/cyan] from {path.name}."
+        )
     else:
         console.print(f"[red]Unsupported file type: {suffix}[/red]")
         raise typer.Exit(code=1)
@@ -301,6 +434,414 @@ def reembed_all() -> None:
             repo.upsert_embedding(p.id, vec)
             status.update(f"{idx}/{len(people)}: {p.name}")
     console.print(f"[green]Re-embedded {len(people)} contacts.[/green]")
+
+
+# --------------------------------------------------------------------- enrich
+@app.command()
+def enrich(
+    owner: Annotated[
+        str | None,
+        typer.Option("--owner", help="Owner slug. Defaults to the only owner if there's one."),
+    ] = None,
+    limit: Annotated[
+        int | None,
+        typer.Option("--limit", help="Process at most N contacts (useful for smoke tests)."),
+    ] = None,
+    only_missing: Annotated[
+        bool,
+        typer.Option(
+            "--only-missing/--all",
+            help="Only enrich rows missing companies/cities (default). Use --all to re-process every row.",
+        ),
+    ] = True,
+    dry_run: Annotated[
+        bool,
+        typer.Option(
+            "--dry-run/--apply",
+            help="--dry-run prints what would be added without writing. --apply persists.",
+        ),
+    ] = True,
+    show_n: Annotated[
+        int,
+        typer.Option(
+            "--show", help="In dry-run mode, print this many sample diffs in full."
+        ),
+    ] = 10,
+) -> None:
+    """Use the configured LLM (Qwen via DashScope) to backfill structured
+    attributes (companies / cities / titles / tags) on each contact.
+
+    Privacy: every request anonymizes in-table person names → Pxxx tokens
+    before the prompt leaves the machine. The reverse map lives only in
+    process memory.
+    """
+    from lodestar.enrich import L1Extractor, LLMClient, LLMError
+
+    repo, _ = _open_repo()
+    owners = repo.list_owners()
+    if not owners:
+        console.print("[red]No owners exist. Run `lodestar init` first.[/red]")
+        raise typer.Exit(code=1)
+
+    if owner is None:
+        if len(owners) == 1:
+            owner_obj = owners[0]
+        else:
+            console.print(
+                f"[red]Multiple owners exist; pass --owner one of: "
+                f"{', '.join(o.slug for o in owners)}.[/red]"
+            )
+            raise typer.Exit(code=1)
+    else:
+        owner_obj = repo.get_owner_by_slug(owner)
+        if owner_obj is None:
+            console.print(f"[red]Owner '{owner}' not found.[/red]")
+            raise typer.Exit(code=1)
+
+    assert owner_obj.id is not None
+    try:
+        client = LLMClient()
+    except LLMError as exc:
+        console.print(f"[red]{exc}[/red]")
+        raise typer.Exit(code=1) from exc
+
+    console.print(
+        f"[dim]Owner: [cyan]{owner_obj.slug}[/cyan] · model: "
+        f"[cyan]{client.model}[/cyan] · only_missing={only_missing} · "
+        f"dry_run={dry_run}[/dim]"
+    )
+
+    extractor = L1Extractor(repo, owner_id=owner_obj.id, client=client)
+    with console.status("LLM 抽取中..."):
+        results = extractor.run(limit=limit, only_missing=only_missing)
+
+    n_total = len(results)
+    n_err = sum(1 for r in results if r.error)
+    n_change = sum(1 for r in results if not r.error and not r.is_empty())
+    n_noop = n_total - n_err - n_change
+
+    console.print(
+        f"[bold]L1 result[/bold]: 处理 {n_total} 条 · 有补全 {n_change} 条 · "
+        f"无变化 {n_noop} 条 · 失败 {n_err} 条"
+    )
+
+    sample = [r for r in results if not r.error and not r.is_empty()][:show_n]
+    if sample:
+        table = Table(title=f"Sample diffs (前 {len(sample)} 条)", show_lines=True)
+        table.add_column("姓名", style="cyan", no_wrap=True)
+        table.add_column("+companies", style="green")
+        table.add_column("+cities", style="green")
+        table.add_column("+titles", style="yellow")
+        table.add_column("+tags", style="magenta")
+        for r in sample:
+            table.add_row(
+                r.name,
+                ", ".join(r.add_companies) or "—",
+                ", ".join(r.add_cities) or "—",
+                ", ".join(r.add_titles) or "—",
+                ", ".join(r.add_tags) or "—",
+            )
+        console.print(table)
+
+    if n_err:
+        for r in results:
+            if r.error:
+                console.print(f"[red]  ✗ {r.name}: {r.error}[/red]")
+
+    if dry_run:
+        console.print(
+            "[dim]Dry-run，未写库。确认效果后用 [bold]--apply[/bold] 重跑同一命令即可写入。[/dim]"
+        )
+        return
+
+    touched = extractor.apply(results)
+    console.print(f"[green]Applied[/green] · 实际更新 {touched} 条 person 行。")
+
+
+# --------------------------------------------------------- infer-colleagues
+@app.command(name="infer-colleagues")
+def infer_colleagues_cmd(
+    owner: Annotated[
+        str | None,
+        typer.Option(
+            "--owner",
+            help="Owner slug. Required when more than one owner exists.",
+        ),
+    ] = None,
+    strength: Annotated[
+        int,
+        typer.Option(
+            "--strength",
+            min=1,
+            max=5,
+            help="Edge strength assigned to inferred colleague pairs (1-5).",
+        ),
+    ] = 4,
+    dry_run: Annotated[
+        bool,
+        typer.Option(
+            "--dry-run/--apply",
+            help="--dry-run prints what would be added; --apply writes.",
+        ),
+    ] = True,
+) -> None:
+    """Re-build same-company peer edges for an owner from the current
+    `person.companies` field (idempotent, safe to re-run).
+
+    Useful right after `enrich`: L1 backfills companies from free text,
+    so a follow-up `infer-colleagues` materializes the implied
+    "two contacts at the same firm" edges. Manual edges are never
+    downgraded — provenance hierarchy in the repository protects them.
+    """
+    from lodestar.importers import infer_colleague_edges_for_owner
+
+    repo, _ = _open_repo()
+    owners = repo.list_owners()
+    if not owners:
+        console.print("[red]No owners exist. Run `lodestar init` first.[/red]")
+        raise typer.Exit(code=1)
+
+    if owner is None:
+        if len(owners) == 1:
+            owner_obj = owners[0]
+        else:
+            console.print(
+                f"[red]Multiple owners exist; pass --owner one of: "
+                f"{', '.join(o.slug for o in owners)}.[/red]"
+            )
+            raise typer.Exit(code=1)
+    else:
+        owner_obj = repo.get_owner_by_slug(owner)
+        if owner_obj is None:
+            console.print(f"[red]Owner '{owner}' not found.[/red]")
+            raise typer.Exit(code=1)
+    assert owner_obj.id is not None
+
+    cliques, edges, top = infer_colleague_edges_for_owner(
+        repo,
+        owner_id=owner_obj.id,
+        strength=strength,
+        dry_run=dry_run,
+    )
+
+    verb = "Would add" if dry_run else "Added"
+    console.print(
+        f"[bold]Owner[/bold] [cyan]{owner_obj.slug}[/cyan] · 同事推断: "
+        f"{cliques} 家公司 ≥2 人 · {verb} {edges} 条 [magenta]colleague_inferred[/magenta] 边 "
+        f"(strength={strength})"
+    )
+    if top:
+        table = Table(title=f"Top cliques (前 {len(top)})", show_lines=False)
+        table.add_column("公司", style="cyan", no_wrap=True)
+        table.add_column("人数", justify="right", style="green")
+        table.add_column("将连边数", justify="right", style="dim")
+        for company, n in top:
+            table.add_row(company, str(n), str(n * (n - 1) // 2))
+        console.print(table)
+    if dry_run:
+        console.print(
+            "[dim]Dry-run，未写库。确认效果后用 [bold]--apply[/bold] 重跑同一命令即可写入。"
+            "已有 manual 边不会被覆盖。[/dim]"
+        )
+
+
+# -------------------------------------------------------- normalize-companies
+@app.command(name="normalize-companies")
+def normalize_companies_cmd(
+    owner: Annotated[
+        str | None,
+        typer.Option(
+            "--owner",
+            help="Owner slug. Required when more than one owner exists.",
+        ),
+    ] = None,
+    alias_file: Annotated[
+        Path | None,
+        typer.Option(
+            "--alias-file",
+            help="JSON/YAML file with `{canonical: [aliases]}` "
+                 "or `[{canonical, aliases}]`. Trumps --builtin on conflict.",
+            exists=True, file_okay=True, dir_okay=False, readable=True,
+        ),
+    ] = None,
+    use_builtin: Annotated[
+        bool,
+        typer.Option(
+            "--builtin/--no-builtin",
+            help="Use the built-in 中国金融机构 alias map "
+                 "(国泰海通 / 申万宏源 / 中金 ...). Default on.",
+        ),
+    ] = True,
+    use_llm: Annotated[
+        bool,
+        typer.Option(
+            "--use-llm",
+            help="Also ask the LLM to cluster the remaining company names. "
+                 "Output is reviewed in dry-run before any write.",
+        ),
+    ] = False,
+    dry_run: Annotated[
+        bool,
+        typer.Option(
+            "--dry-run/--apply",
+            help="--dry-run prints planned merges; --apply writes.",
+        ),
+    ] = True,
+) -> None:
+    """Merge alias / merger-renamed company rows so colleague inference
+    can connect contacts that ended up under different writings of the
+    same employer (e.g. 国泰君安 ↔ 国泰海通).
+
+    Three contributing alias sources, all combined:
+
+      1. Built-in map (公开合并改名 + 缩写). Toggle with --no-builtin.
+      2. Optional user file (--alias-file). Wins over builtin.
+      3. Optional LLM clustering (--use-llm). Fills the gap; never
+         overrides 1 or 2.
+
+    Always dry-run first. Re-run `lodestar infer-colleagues --apply`
+    afterwards to materialise the new same-company peer edges.
+    """
+    from lodestar.enrich import (
+        AliasGroup,
+        LLMClient,
+        LLMError,
+        build_groups,
+        cluster_with_llm,
+        load_alias_file,
+    )
+
+    repo, _ = _open_repo()
+    owners = repo.list_owners()
+    if not owners:
+        console.print("[red]No owners exist. Run `lodestar init` first.[/red]")
+        raise typer.Exit(code=1)
+
+    if owner is None:
+        if len(owners) == 1:
+            owner_obj = owners[0]
+        else:
+            console.print(
+                f"[red]Multiple owners exist; pass --owner one of: "
+                f"{', '.join(o.slug for o in owners)}.[/red]"
+            )
+            raise typer.Exit(code=1)
+    else:
+        owner_obj = repo.get_owner_by_slug(owner)
+        if owner_obj is None:
+            console.print(f"[red]Owner '{owner}' not found.[/red]")
+            raise typer.Exit(code=1)
+    assert owner_obj.id is not None
+
+    rows = repo.list_owner_companies(owner_obj.id)
+    if not rows:
+        console.print(
+            f"[yellow]Owner [cyan]{owner_obj.slug}[/cyan] 下没有任何 person_company "
+            "记录；先跑 import / enrich 再回来。[/yellow]"
+        )
+        return
+    present = {name: n for _cid, name, n in rows}
+
+    user_aliases: dict[str, list[str]] | None = None
+    if alias_file is not None:
+        try:
+            user_aliases = load_alias_file(alias_file)
+        except Exception as exc:  # noqa: BLE001
+            console.print(f"[red]读取 alias 文件失败：{exc}[/red]")
+            raise typer.Exit(code=1) from exc
+        console.print(
+            f"[dim]从 {alias_file} 读取 {len(user_aliases)} 条用户 alias 规则。[/dim]"
+        )
+
+    llm_groups: list[AliasGroup] = []
+    if use_llm:
+        try:
+            client = LLMClient()
+        except LLMError as exc:
+            console.print(f"[red]{exc}[/red]")
+            raise typer.Exit(code=1) from exc
+        # Strip names already covered by deterministic sources, so the LLM
+        # only spends tokens on the residual.
+        deterministic = build_groups(
+            present=present,
+            builtin=use_builtin,
+            user_aliases=user_aliases,
+        )
+        already_claimed = {m for g in deterministic for m in g.members()}
+        residual = [n for n in present if n not in already_claimed]
+        console.print(
+            f"[dim]LLM 二次清洗：builtin/file 已覆盖 {len(already_claimed)} 个名字，"
+            f"剩下 {len(residual)} 个交给 LLM (model={client.model})...[/dim]"
+        )
+        with console.status("LLM 公司聚类中..."):
+            try:
+                llm_groups = cluster_with_llm(residual, client=client)
+            except LLMError as exc:
+                console.print(f"[red]LLM 聚类失败：{exc}[/red]")
+                raise typer.Exit(code=1) from exc
+
+    groups = build_groups(
+        present=present,
+        builtin=use_builtin,
+        user_aliases=user_aliases,
+        llm_groups=llm_groups,
+    )
+
+    if not groups:
+        console.print(
+            f"[green]Owner [cyan]{owner_obj.slug}[/cyan] 没有发现任何 alias 合并机会。[/green]"
+        )
+        return
+
+    n_present = len(present)
+    n_after = n_present - sum(len(g.aliases) for g in groups)
+    console.print(
+        f"[bold]Owner[/bold] [cyan]{owner_obj.slug}[/cyan] · "
+        f"将 {n_present} 个公司名归并为 {n_after} 个 "
+        f"({n_present - n_after} 条 alias)"
+    )
+
+    table = Table(title=f"Planned merges ({len(groups)} 组)", show_lines=True)
+    table.add_column("canonical", style="cyan", no_wrap=True)
+    table.add_column("aliases →", style="yellow")
+    table.add_column("人数", justify="right", style="green")
+    table.add_column("来源", style="magenta", no_wrap=True)
+    for g in groups:
+        table.add_row(
+            g.canonical,
+            ", ".join(f"{a}({present.get(a, 0)})" for a in g.aliases),
+            str(g.headcount),
+            g.source,
+        )
+    console.print(table)
+
+    if dry_run:
+        console.print(
+            "[dim]Dry-run，未写库。确认无误后用 [bold]--apply[/bold] 重跑同一命令；"
+            "之后再跑 [bold]lodestar infer-colleagues --apply[/bold] "
+            "把新合并出的同事关系物化成 peer 边。[/dim]"
+        )
+        return
+
+    total_reassigned = 0
+    total_deleted = 0
+    for g in groups:
+        reassigned, deleted = repo.merge_companies(
+            g.canonical,
+            g.aliases,
+            owner_id=owner_obj.id,
+        )
+        total_reassigned += reassigned
+        total_deleted += deleted
+
+    console.print(
+        f"[green]Applied[/green] · 合并了 [bold]{total_deleted}[/bold] 个 alias 行 · "
+        f"重定向 [bold]{total_reassigned}[/bold] 条 person_company 关联。"
+    )
+    console.print(
+        "[dim]接下来：[bold]uv run lodestar infer-colleagues --owner "
+        f"{owner_obj.slug} --apply[/bold] 把新挖出的同事关系连成 peer 边。[/dim]"
+    )
 
 
 # ----------------------------------------------------------------------- viz
@@ -383,10 +924,10 @@ def serve(
 
     repo, _ = _open_repo()
     try:
-        me = repo.get_me()
+        owners = repo.list_owners()
     finally:
         repo.conn.close()
-    if me is None:
+    if not owners:
         console.print("[red]Run `lodestar init` first.[/red]")
         raise typer.Exit(code=1)
 

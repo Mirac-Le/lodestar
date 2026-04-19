@@ -8,7 +8,7 @@ from contextlib import contextmanager
 from pathlib import Path
 
 import networkx as nx
-from fastapi import Depends, FastAPI, HTTPException
+from fastapi import Depends, FastAPI, HTTPException, Query
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 
@@ -19,6 +19,7 @@ from lodestar.embedding import get_embedding_client
 from lodestar.llm import GoalParser, get_llm_client
 from lodestar.models import (
     GoalIntent,
+    Owner,
     PathResult,
     PathStep,
     Person,
@@ -26,13 +27,20 @@ from lodestar.models import (
 )
 from lodestar.search import HybridSearch, PathFinder
 from lodestar.viz.pyvis_export import infer_industry
+from lodestar.web import enrich_jobs
 from lodestar.web.schemas import (
     CreatePersonRequest,
+    EnrichDiff,
+    EnrichJobStartRequest,
+    EnrichJobState,
+    EnrichPreviewRequest,
     GraphEdge,
     GraphNode,
     GraphPayload,
     IntroductionsResponse,
     IntroductionSuggestion,
+    OwnerDTO,
+    OwnersResponse,
     PathResultDTO,
     PathStepDTO,
     PersonDTO,
@@ -162,6 +170,27 @@ def get_repo() -> Iterator[Repository]:
         yield repo
 
 
+def _resolve_owner(repo: Repository, slug: str | None) -> Owner:
+    """Pick the active owner from the optional `?owner=slug` query.
+
+    Falls back to the first owner (lowest position / id) when the
+    parameter is absent. Raises 400 if no owners exist at all and 404 if
+    the requested slug is unknown — both surface as actionable errors in
+    the SPA.
+    """
+    owners = repo.list_owners()
+    if not owners:
+        raise HTTPException(
+            400, "Database not initialised. Run `lodestar init` first."
+        )
+    if slug is None:
+        return owners[0]
+    for o in owners:
+        if o.slug == slug:
+            return o
+    raise HTTPException(404, f"Unknown owner '{slug}'.")
+
+
 # ---------------------------------------------------------------- app
 def create_app() -> FastAPI:
     app = FastAPI(
@@ -180,14 +209,37 @@ def create_app() -> FastAPI:
             "/static", StaticFiles(directory=str(STATIC_DIR)), name="static"
         )
 
+    # ---------- owners
+    @app.get("/api/owners", response_model=OwnersResponse)
+    def list_owners(repo: Repository = Depends(get_repo)) -> OwnersResponse:
+        owners = repo.list_owners()
+        if not owners:
+            return OwnersResponse(owners=[], default_slug=None)
+        default_slug = owners[0].slug
+        out: list[OwnerDTO] = []
+        for o in owners:
+            assert o.id is not None
+            count = len(repo.list_people(owner_id=o.id))
+            out.append(OwnerDTO(
+                id=o.id, slug=o.slug, display_name=o.display_name,
+                me_person_id=o.me_person_id, accent_color=o.accent_color,
+                contact_count=count, is_default=(o.slug == default_slug),
+            ))
+        return OwnersResponse(owners=out, default_slug=default_slug)
+
     # ---------- graph
     @app.get("/api/graph", response_model=GraphPayload)
-    def get_graph(repo: Repository = Depends(get_repo)) -> GraphPayload:
-        me = repo.get_me()
+    def get_graph(
+        owner: str | None = Query(None),
+        repo: Repository = Depends(get_repo),
+    ) -> GraphPayload:
+        owner_obj = _resolve_owner(repo, owner)
+        assert owner_obj.id is not None
+        me = repo.get_me(owner_id=owner_obj.id)
         if me is None or me.id is None:
-            raise HTTPException(400, "Database not initialized; run `lodestar init`.")
-        people = repo.list_people()
-        rels = repo.list_relationships()
+            raise HTTPException(400, "Owner has no `me` row; reseed the database.")
+        people = repo.list_people(owner_id=owner_obj.id)
+        rels = repo.list_relationships(owner_id=owner_obj.id)
         s2me = _strength_to_me(rels, me.id)
         nodes = [_to_graph_node(me, None)] + [
             _to_graph_node(p, s2me.get(p.id) if p.id else None) for p in people
@@ -201,16 +253,23 @@ def create_app() -> FastAPI:
             )
             for r in rels
         ]
-        return GraphPayload(nodes=nodes, edges=edges, me_id=me.id)
+        return GraphPayload(
+            nodes=nodes, edges=edges, me_id=me.id,
+            owner_slug=owner_obj.slug,
+            owner_display_name=owner_obj.display_name,
+        )
 
     # ---------- search
     @app.post("/api/search", response_model=SearchResponse)
     def search(
-        body: SearchRequest, repo: Repository = Depends(get_repo)
+        body: SearchRequest,
+        owner: str | None = Query(None),
+        repo: Repository = Depends(get_repo),
     ) -> SearchResponse:
         if not body.goal.strip():
             raise HTTPException(400, "Empty goal")
         settings = get_settings()
+        owner_obj = _resolve_owner(repo, owner)
         if body.no_llm:
             intent = GoalIntent(
                 original=body.goal, keywords=[body.goal], summary=body.goal,
@@ -226,16 +285,18 @@ def create_app() -> FastAPI:
             embedder = get_embedding_client()
         except Exception:
             embedder = None
-        candidates = HybridSearch(repo=repo, embedder=embedder).search(
-            intent, top_k=settings.top_k,
-        )
+        candidates = HybridSearch(
+            repo=repo, embedder=embedder, owner_id=owner_obj.id,
+        ).search(intent, top_k=settings.top_k)
         if not candidates:
             return SearchResponse(
                 goal=body.goal, intent_summary=intent.summary,
                 intent_keywords=intent.keywords, results=[],
                 highlighted_node_ids=[], highlighted_edge_ids=[],
             )
-        ranked = PathFinder(repo=repo, max_hops=settings.max_hops).rank(candidates)
+        ranked = PathFinder(
+            repo=repo, max_hops=settings.max_hops, owner_id=owner_obj.id,
+        ).rank(candidates)
 
         # Bucket purely by graph topology. Each bucket is independently
         # truncated so direct contacts can't crowd indirect intros out of
@@ -278,12 +339,18 @@ def create_app() -> FastAPI:
 
     # ---------- person detail
     @app.get("/api/people/{pid}", response_model=PersonDTO)
-    def get_person(pid: int, repo: Repository = Depends(get_repo)) -> PersonDTO:
+    def get_person(
+        pid: int,
+        owner: str | None = Query(None),
+        repo: Repository = Depends(get_repo),
+    ) -> PersonDTO:
         person = repo.get_person(pid)
         if person is None:
             raise HTTPException(404, f"Person {pid} not found")
-        me = repo.get_me()
-        rels = repo.list_relationships()
+        owner_obj = _resolve_owner(repo, owner)
+        assert owner_obj.id is not None
+        me = repo.get_me(owner_id=owner_obj.id)
+        rels = repo.list_relationships(owner_id=owner_obj.id)
         s2me = _strength_to_me(rels, me.id) if me and me.id else {}
         if person.is_me:
             industry, color, glow = "我", "#f7f8f8", "#9ca4ae"
@@ -319,11 +386,15 @@ def create_app() -> FastAPI:
     # ---------- create
     @app.post("/api/people", response_model=PersonDTO)
     def create_person(
-        body: CreatePersonRequest, repo: Repository = Depends(get_repo)
+        body: CreatePersonRequest,
+        owner: str | None = Query(None),
+        repo: Repository = Depends(get_repo),
     ) -> PersonDTO:
-        me = repo.get_me()
+        owner_obj = _resolve_owner(repo, owner)
+        assert owner_obj.id is not None
+        me = repo.get_me(owner_id=owner_obj.id)
         if me is None or me.id is None:
-            raise HTTPException(400, "Run `lodestar init` first")
+            raise HTTPException(400, "Owner has no `me` row.")
         person = Person(
             name=body.name, bio=body.bio, notes=body.notes,
             tags=body.tags, skills=body.skills, companies=body.companies,
@@ -332,12 +403,13 @@ def create_app() -> FastAPI:
         )
         saved = repo.add_person(person)
         assert saved.id is not None
+        repo.attach_person_to_owner(saved.id, owner_obj.id)
         repo.add_relationship(Relationship(
             source_id=me.id, target_id=saved.id,
             strength=body.strength_to_me,
             context=body.relation_context,
             frequency=body.frequency,
-        ))
+        ), owner_id=owner_obj.id)
         if body.embed and saved.bio:
             try:
                 vec = get_embedding_client().embed(_embed_text(saved))
@@ -352,7 +424,9 @@ def create_app() -> FastAPI:
     # ---------- update
     @app.patch("/api/people/{pid}", response_model=PersonDTO)
     def update_person(
-        pid: int, body: UpdatePersonRequest, repo: Repository = Depends(get_repo)
+        pid: int, body: UpdatePersonRequest,
+        owner: str | None = Query(None),
+        repo: Repository = Depends(get_repo),
     ) -> PersonDTO:
         existing = repo.get_person(pid)
         if existing is None:
@@ -380,7 +454,7 @@ def create_app() -> FastAPI:
                 repo.upsert_embedding(pid, vec)
             except Exception:
                 pass
-        return get_person(pid, repo=repo)
+        return get_person(pid, owner=owner, repo=repo)
 
     # ---------- delete
     @app.delete("/api/people/{pid}")
@@ -391,10 +465,13 @@ def create_app() -> FastAPI:
     # ---------- two-person path
     @app.post("/api/path", response_model=TwoPersonPathResponse)
     def find_paths(
-        body: TwoPersonPathRequest, repo: Repository = Depends(get_repo)
+        body: TwoPersonPathRequest,
+        owner: str | None = Query(None),
+        repo: Repository = Depends(get_repo),
     ) -> TwoPersonPathResponse:
         settings = get_settings()
-        rels = repo.list_relationships()
+        owner_obj = _resolve_owner(repo, owner)
+        rels = repo.list_relationships(owner_id=owner_obj.id)
         g: nx.Graph = nx.Graph()
         for r in rels:
             g.add_edge(
@@ -449,8 +526,12 @@ def create_app() -> FastAPI:
 
     # ---------- introductions you could broker
     @app.get("/api/introductions", response_model=IntroductionsResponse)
-    def introductions(repo: Repository = Depends(get_repo)) -> IntroductionsResponse:
-        people = repo.list_people()
+    def introductions(
+        owner: str | None = Query(None),
+        repo: Repository = Depends(get_repo),
+    ) -> IntroductionsResponse:
+        owner_obj = _resolve_owner(repo, owner)
+        people = repo.list_people(owner_id=owner_obj.id)
         suggestions: list[IntroductionSuggestion] = []
         for seeker in people:
             if not seeker.needs:
@@ -490,12 +571,137 @@ def create_app() -> FastAPI:
         # cap output
         return IntroductionsResponse(suggestions=suggestions[:50])
 
+    # ---------- enrich (LLM-based attribute extraction)
+    @app.post("/api/enrich/preview", response_model=EnrichDiff)
+    def enrich_preview(
+        body: EnrichPreviewRequest,
+        owner: str | None = Query(None),
+        repo: Repository = Depends(get_repo),
+    ) -> EnrichDiff:
+        """A: 添加联系人对话框里的"AI 解析背景"按钮入口。
+
+        Anonymizes any in-table names mentioned in the input, calls the
+        LLM, returns the proposed structured fields. Does NOT write to
+        the DB — the SPA fills the chips and the user clicks 保存 next.
+        """
+        from lodestar.enrich import L1Extractor, LLMClient, LLMError
+
+        owner_obj = _resolve_owner(repo, owner)
+        assert owner_obj.id is not None
+        try:
+            client = LLMClient()
+        except LLMError as exc:
+            raise HTTPException(503, str(exc)) from exc
+        extractor = L1Extractor(repo, owner_id=owner_obj.id, client=client)
+        try:
+            result = extractor.extract_for_input(
+                name=body.name,
+                bio=body.bio,
+                notes=body.notes,
+                raw_tags=body.raw_tags,
+                raw_cities=body.raw_cities,
+                known_companies=body.known_companies,
+                known_cities=body.known_cities,
+                known_tags=body.known_tags,
+            )
+        except LLMError as exc:
+            raise HTTPException(502, f"LLM 调用失败：{exc}") from exc
+        return EnrichDiff(
+            add_companies=result.add_companies,
+            add_cities=result.add_cities,
+            add_titles=result.add_titles,
+            add_tags=result.add_tags,
+            error=result.error,
+        )
+
+    @app.post("/api/enrich/person/{pid}", response_model=PersonDTO)
+    def enrich_person(
+        pid: int,
+        owner: str | None = Query(None),
+        only_missing: bool = Query(True),
+        repo: Repository = Depends(get_repo),
+    ) -> PersonDTO:
+        """C: 联系人详情面板里的"AI 重新解析"按钮入口。
+
+        only_missing=True (默认): 只在 companies/cities 为空时跑 LLM；
+        only_missing=False: 强制重跑并合并新结果到已有字段（不会删除已有值）。
+        """
+        from lodestar.enrich import L1Extractor, LLMClient, LLMError
+
+        person = repo.get_person(pid)
+        if person is None:
+            raise HTTPException(404, f"Person {pid} not found")
+        if person.is_me:
+            raise HTTPException(400, "不能对 me 节点跑 enrich")
+
+        owner_obj = _resolve_owner(repo, owner)
+        assert owner_obj.id is not None
+
+        if only_missing and bool(person.companies) and bool(person.cities):
+            # Nothing to do; just return the existing person.
+            return get_person(pid, owner=owner, repo=repo)
+
+        try:
+            client = LLMClient()
+        except LLMError as exc:
+            raise HTTPException(503, str(exc)) from exc
+        extractor = L1Extractor(repo, owner_id=owner_obj.id, client=client)
+        try:
+            diff = extractor.extract_for_person(person)
+        except LLMError as exc:
+            raise HTTPException(502, f"LLM 调用失败：{exc}") from exc
+        if not diff.error and not diff.is_empty():
+            extractor.apply([diff])
+        return get_person(pid, owner=owner, repo=repo)
+
+    @app.post("/api/enrich/owner", response_model=EnrichJobState)
+    def enrich_owner_start(
+        body: EnrichJobStartRequest,
+        owner: str | None = Query(None),
+        repo: Repository = Depends(get_repo),
+    ) -> EnrichJobState:
+        """D: 顶栏"批量 AI 解析"入口。
+
+        非阻塞地启动后台 worker。若该 owner 已有任务在跑，返回现存
+        task_id（不会并行启动两个）。前端用 GET /api/enrich/status/{id}
+        每 2 秒拉一次进度。
+        """
+        owner_obj = _resolve_owner(repo, owner)
+        assert owner_obj.id is not None
+        # Ensure the LLM client can be constructed before launching the
+        # worker — otherwise the user would only see the failure via
+        # polling.
+        from lodestar.enrich import LLMClient, LLMError
+
+        try:
+            LLMClient()
+        except LLMError as exc:
+            raise HTTPException(503, str(exc)) from exc
+        state = enrich_jobs.start(
+            owner_id=owner_obj.id,
+            owner_slug=owner_obj.slug,
+            only_missing=body.only_missing,
+        )
+        return EnrichJobState(**state.to_dict())
+
+    @app.get("/api/enrich/status/{task_id}", response_model=EnrichJobState)
+    def enrich_status(task_id: str) -> EnrichJobState:
+        state = enrich_jobs.get(task_id)
+        if state is None:
+            raise HTTPException(404, f"Unknown enrich task '{task_id}'")
+        return EnrichJobState(**state.to_dict())
+
     # ---------- stats
     @app.get("/api/stats", response_model=StatsResponse)
-    def stats(repo: Repository = Depends(get_repo)) -> StatsResponse:
-        people = repo.list_people()
-        rels = repo.list_relationships()
-        me = repo.get_me()
+    def stats(
+        owner: str | None = Query(None),
+        repo: Repository = Depends(get_repo),
+    ) -> StatsResponse:
+        owner_obj = _resolve_owner(repo, owner)
+        assert owner_obj.id is not None
+        people = repo.list_people(owner_id=owner_obj.id)
+        rels = repo.list_relationships(owner_id=owner_obj.id)
+        me = repo.get_me(owner_id=owner_obj.id)
         s2me = _strength_to_me(rels, me.id) if me and me.id else {}
 
         ind_counter: Counter[str] = Counter()

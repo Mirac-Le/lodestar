@@ -37,10 +37,12 @@ class HybridSearch:
         repo: Repository,
         embedder: EmbeddingClient | None,
         rrf_k: int = 60,
+        owner_id: int | None = None,
     ) -> None:
         self._repo = repo
         self._embedder = embedder
         self._rrf_k = rrf_k
+        self._owner_id = owner_id
 
     def search(self, intent: GoalIntent, top_k: int = 20) -> list[Candidate]:
         """Return ranked candidates best matching the goal."""
@@ -84,6 +86,9 @@ class HybridSearch:
         except Exception:
             return {}
         hits = self._repo.vector_search(vector, limit=limit)
+        if self._owner_id is not None:
+            allowed = self._repo.list_owner_person_ids(self._owner_id)
+            hits = [(pid, dist) for pid, dist in hits if pid in allowed]
         return {pid: rank + 1 for rank, (pid, _dist) in enumerate(hits)}
 
     def _helper_keyword_ranks(self, intent: GoalIntent) -> dict[int, int]:
@@ -102,7 +107,7 @@ class HybridSearch:
     def _rank_terms(self, terms: list[str]) -> dict[int, int]:
         if not terms:
             return {}
-        scores = self._repo.keyword_candidates(terms)
+        scores = self._repo.keyword_candidates(terms, owner_id=self._owner_id)
         if not scores:
             return {}
         ordered = sorted(scores.items(), key=lambda kv: kv[1], reverse=True)

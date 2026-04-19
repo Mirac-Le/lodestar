@@ -4,10 +4,10 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1">
   <title>Lodestar — Personal Network Navigator</title>
-  <link rel="stylesheet" href="/static/style.css?v=20260417-9">
+  <link rel="stylesheet" href="/static/style.css?v=20260420-uncontacted">
   <script src="/static/cytoscape.min.js"></script>
   <script src="/static/echarts.min.js"></script>
-  <script defer src="/static/app.js?v=20260417-9"></script>
+  <script defer src="/static/app.js?v=20260420-uncontacted"></script>
   <script defer src="/static/alpine.min.js"></script>
 </head>
 <body x-data="appState()" x-init="init()" :class="searching ? 'searching' : ''">
@@ -61,11 +61,30 @@
   <!-- ========== Top bar ========== -->
   <div class="topbar">
     <div class="brand"><span class="brand-mark" aria-hidden="true"></span>Lodestar</div>
+
+    <!-- Owner segmented tab: switches between Richard / Tommy / ... -->
+    <template x-if="owners.length > 1">
+      <div class="owner-tabs" role="tablist" aria-label="切换网络主人">
+        <template x-for="o in owners" :key="o.slug">
+          <button
+            type="button"
+            role="tab"
+            class="owner-tab"
+            :class="{ 'is-active': owner === o.slug }"
+            :aria-selected="owner === o.slug"
+            @click="switchOwner(o.slug)">
+            <span class="owner-name" x-text="o.display_name"></span>
+            <span class="owner-count" x-text="o.contact_count"></span>
+          </button>
+        </template>
+      </div>
+    </template>
+
     <div class="search-box">
       <span class="icon"><svg class="ico" width="14" height="14"><use href="#i-search"/></svg></span>
       <input id="search-input" type="text" x-model="query"
              @keydown.enter="runSearch()"
-             placeholder="说出你的目标，例如「找量化私募聊因子」">
+             placeholder="说说你想找谁、想聊什么，例如「找量化私募聊因子」">
       <template x-if="query">
         <button type="button" class="clear" @click="clearSearch()" title="清除">
           <svg width="12" height="12"><use href="#i-close"/></svg>
@@ -94,6 +113,10 @@
     <button class="btn primary" @click="openAdd()" title="添加联系人 (N)">
       <svg class="ico" width="14" height="14"><use href="#i-plus"/></svg>
       <span>新联系人</span>
+    </button>
+    <button class="btn" @click="openBatchEnrich()"
+            title="对当前 owner 下所有联系人做 AI 解析（缺字段才跑）">
+      <span style="font-weight: 600; letter-spacing: .02em;">AI 解析</span>
     </button>
     <button class="btn icon-only" @click="showHelp = true" title="快捷键 (?)">?</button>
   </div>
@@ -159,7 +182,7 @@
         <span class="ct"
               x-text="pathMode
                 ? `${indirect.length} 条候选 · 已按强度排序`
-                : `${direct.length} 直接 · ${weak.length} 弱认识 · ${indirect.length} 需引荐${wishlist.length ? ` · ${wishlist.length} 心愿` : ''}`"></span>
+                : `${direct.length} 直接 · ${weak.length} 弱认识 · ${indirect.length} 需引荐${wishlist.length ? ` · ${wishlist.length} 未联系` : ''}`"></span>
         <button class="close" @click="clearSearch()">
           <svg width="12" height="12"><use href="#i-close"/></svg>
         </button>
@@ -190,7 +213,7 @@
                   <span class="kind-chip kind-chip-target"
                         x-text="`${p.path.length - 1} 跳`"></span>
                   <template x-if="p.is_wishlist">
-                    <span class="kind-chip kind-chip-wishlist" title="你标记为心愿联系人">★ 心愿</span>
+                    <span class="kind-chip kind-chip-wishlist" title="你标记为还没直接联系到（关系类型=未联系）">★ 未联系</span>
                   </template>
                 </div>
                 <div class="path-chain">
@@ -234,7 +257,7 @@
                   <span class="name" x-text="p.target_name"></span>
                   <span class="kind-chip kind-chip-direct">直接</span>
                   <template x-if="p.is_wishlist">
-                    <span class="kind-chip kind-chip-wishlist" title="你标记为心愿联系人">★ 心愿</span>
+                    <span class="kind-chip kind-chip-wishlist" title="你标记为还没直接联系到（关系类型=未联系）">★ 未联系</span>
                   </template>
                 </div>
                 <div class="path-context" x-text="pathContextLine(p)"></div>
@@ -263,7 +286,7 @@
                   <span class="name" x-text="p.target_name"></span>
                   <span class="kind-chip kind-chip-weak">弱</span>
                   <template x-if="p.is_wishlist">
-                    <span class="kind-chip kind-chip-wishlist" title="你标记为心愿联系人">★ 心愿</span>
+                    <span class="kind-chip kind-chip-wishlist" title="你标记为还没直接联系到（关系类型=未联系）">★ 未联系</span>
                   </template>
                 </div>
                 <div class="path-context" x-text="pathContextLine(p)"></div>
@@ -335,7 +358,19 @@
       <template x-if="detail.bio">
         <div class="detail-section">
           <div class="label">简介</div>
-          <div class="value" x-text="detail.bio"></div>
+          <template x-if="bioPairs(detail.bio)">
+            <dl class="bio-kv">
+              <template x-for="(p, i) in bioPairs(detail.bio)" :key="i">
+                <div class="bio-kv-row">
+                  <dt x-text="p.key"></dt>
+                  <dd x-text="p.value"></dd>
+                </div>
+              </template>
+            </dl>
+          </template>
+          <template x-if="!bioPairs(detail.bio)">
+            <div class="value" x-text="detail.bio"></div>
+          </template>
         </div>
       </template>
 
@@ -409,6 +444,12 @@
         <div class="detail-actions">
           <button class="btn" @click="enterTwoPerson(); pathStart = detail; clearDetail()"
                   title="把此人作为路径起点">设为起点</button>
+          <button class="btn"
+                  :disabled="aiPersonBusy === detail.id"
+                  @click="aiReparseCurrent()"
+                  title="用 AI 从此人的简介/备注里再抽一次结构化字段，合并进现有内容">
+            <span x-text="aiPersonBusy === detail.id ? 'AI 解析中…' : 'AI 重新解析'"></span>
+          </button>
           <button class="btn danger" @click="deleteCurrent()">删除</button>
         </div>
       </template>
@@ -504,9 +545,110 @@
             <span style="color: var(--text-secondary); font-size: 12px;">立即生成 embedding（需 API key）</span>
           </label>
         </div>
+
+        <!-- AI parse: extract structured fields from bio/notes -->
+        <div class="field">
+          <div style="display: flex; gap: 8px; align-items: center;
+                      justify-content: space-between;">
+            <span style="color: var(--text-secondary); font-size: 12px;">
+              用 AI 从「简介」+「私人备注」抽取公司 / 城市 / 标签
+            </span>
+            <button type="button" class="btn"
+                    :disabled="aiPreviewBusy || (!newPerson.bio && !newPerson.notes)"
+                    @click="aiPreviewForNewPerson()"
+                    style="padding: 6px 12px;">
+              <span x-text="aiPreviewBusy ? 'AI 解析中…' : 'AI 解析'"></span>
+            </button>
+          </div>
+          <template x-if="aiPreviewError">
+            <div style="margin-top: 6px; color: var(--danger); font-size: 12px;"
+                 x-text="aiPreviewError"></div>
+          </template>
+          <template x-if="aiPreviewSummary">
+            <div style="margin-top: 6px; color: var(--text-muted); font-size: 12px;"
+                 x-text="aiPreviewSummary"></div>
+          </template>
+        </div>
+
         <div class="modal-actions">
           <button class="btn" @click="showAdd = false">取消</button>
           <button class="btn primary" @click="submitAdd()">保存</button>
+        </div>
+      </div>
+    </div>
+  </template>
+
+  <!-- ========== Batch AI enrich modal ========== -->
+  <template x-if="showBatchEnrich">
+    <div class="modal-bg" @click.self="closeBatchEnrich()">
+      <div class="modal">
+        <h2>批量 AI 解析</h2>
+        <p>
+          对 <span x-text="ownerLabel(owner)"></span> 名下所有联系人跑一次结构化解析。
+          姓名会先在本地脱敏成 <span style="font-family: var(--font-mono, monospace);">P001/P002…</span>
+          再发到云端 LLM，结果回到本地后只做<strong>追加</strong>，不会删除已有字段。
+        </p>
+
+        <template x-if="!batchJob || batchJob.status === 'pending'">
+          <div class="field">
+            <label style="display: flex; align-items: center; gap: 8px; text-transform: none; letter-spacing: 0;">
+              <input type="checkbox" x-model="batchOnlyMissing" style="width:auto;">
+              <span style="color: var(--text-secondary); font-size: 12px;">
+                只跑缺 companies / cities 的联系人（推荐）
+              </span>
+            </label>
+          </div>
+        </template>
+
+        <template x-if="batchJob">
+          <div style="margin-top: 12px;">
+            <div style="display: flex; justify-content: space-between;
+                        font-size: 12px; color: var(--text-secondary);
+                        margin-bottom: 6px;">
+              <span x-text="`状态：${batchStatusLabel(batchJob.status)}`"></span>
+              <span x-text="`${batchJob.processed} / ${batchJob.total}`"></span>
+            </div>
+            <div style="width: 100%; height: 6px; background: var(--surface-2);
+                        border-radius: 3px; overflow: hidden;">
+              <div :style="`width: ${batchProgressPct()}%; height: 100%;
+                            background: var(--accent, #6b7280);
+                            transition: width .25s ease;`"></div>
+            </div>
+            <template x-if="batchJob.current_name && batchJob.status === 'running'">
+              <div style="margin-top: 8px; color: var(--text-muted); font-size: 12px;"
+                   x-text="`正在处理：${batchJob.current_name}`"></div>
+            </template>
+            <template x-if="batchJob.status === 'done'">
+              <div style="margin-top: 8px; color: var(--text-secondary); font-size: 12px;">
+                完成。本次更新 <strong x-text="batchJob.touched"></strong> 条记录，
+                失败 <span x-text="batchJob.errors"></span> 条，
+                耗时 <span x-text="batchJob.elapsed_seconds.toFixed(1)"></span> 秒。
+              </div>
+            </template>
+            <template x-if="batchJob.status === 'error'">
+              <div style="margin-top: 8px; color: var(--danger); font-size: 12px;"
+                   x-text="`失败：${batchJob.error_message || '未知错误'}`"></div>
+            </template>
+          </div>
+        </template>
+
+        <div class="modal-actions">
+          <template x-if="!batchJob || batchJob.status === 'done' || batchJob.status === 'error'">
+            <button class="btn" @click="closeBatchEnrich()">关闭</button>
+          </template>
+          <template x-if="batchJob && (batchJob.status === 'pending' || batchJob.status === 'running')">
+            <button class="btn" @click="closeBatchEnrich()"
+                    title="后台仍会继续跑；下次再点开 AI 解析能继续看到进度">
+              后台运行
+            </button>
+          </template>
+          <template x-if="!batchJob || batchJob.status === 'done' || batchJob.status === 'error'">
+            <button class="btn primary"
+                    :disabled="batchStarting"
+                    @click="startBatchEnrich()">
+              <span x-text="batchJob && batchJob.status === 'done' ? '再跑一次' : (batchStarting ? '启动中…' : '开始解析')"></span>
+            </button>
+          </template>
         </div>
       </div>
     </div>

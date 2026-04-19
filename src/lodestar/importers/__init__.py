@@ -5,8 +5,10 @@ from lodestar.importers.excel_importer import (
     ColumnMapping,
     ExcelImporter,
     ImportStats,
-    chinese_finance_preset,
     extended_network_preset,
+    infer_colleague_edges_for_owner,
+    richard_finance_preset,
+    tommy_contacts_preset,
 )
 
 __all__ = [
@@ -14,6 +16,8 @@ __all__ = [
     "ColumnMapping",
     "ExcelImporter",
     "ImportStats",
-    "chinese_finance_preset",
     "extended_network_preset",
+    "infer_colleague_edges_for_owner",
+    "richard_finance_preset",
+    "tommy_contacts_preset",
 ]

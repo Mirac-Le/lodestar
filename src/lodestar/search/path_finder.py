@@ -16,9 +16,15 @@ class PathFinder:
     as either (me, X) or (X, me) both work.
     """
 
-    def __init__(self, repo: Repository, max_hops: int = 3) -> None:
+    def __init__(
+        self,
+        repo: Repository,
+        max_hops: int = 3,
+        owner_id: int | None = None,
+    ) -> None:
         self._repo = repo
         self._max_hops = max_hops
+        self._owner_id = owner_id
         self._graph: nx.Graph | None = None
         self._person_cache: dict[int, Person] = {}
 
@@ -41,7 +47,7 @@ class PathFinder:
         now a UI concern only (Person.is_wishlist) — ranking treats every
         reachable person fairly.
         """
-        me = self._repo.get_me()
+        me = self._repo.get_me(owner_id=self._owner_id)
         if me is None or me.id is None:
             raise RuntimeError("No 'me' record. Run `lodestar init` first.")
 
@@ -98,7 +104,7 @@ class PathFinder:
         if self._graph is not None:
             return self._graph
         g: nx.Graph = nx.Graph()
-        for rel in self._repo.list_relationships():
+        for rel in self._repo.list_relationships(owner_id=self._owner_id):
             weight = 1.0 / max(rel.strength, 1)
             g.add_edge(
                 rel.source_id,

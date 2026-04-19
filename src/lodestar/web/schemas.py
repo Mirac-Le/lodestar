@@ -43,6 +43,25 @@ class GraphPayload(BaseModel):
     nodes: list[GraphNode]
     edges: list[GraphEdge]
     me_id: int
+    owner_slug: str | None = None
+    owner_display_name: str | None = None
+
+
+class OwnerDTO(BaseModel):
+    """One network owner exposed to the SPA."""
+
+    id: int
+    slug: str
+    display_name: str
+    me_person_id: int
+    accent_color: str | None = None
+    contact_count: int = 0
+    is_default: bool = False
+
+
+class OwnersResponse(BaseModel):
+    owners: list[OwnerDTO]
+    default_slug: str | None = None
 
 
 class PathStepDTO(BaseModel):
@@ -150,6 +169,54 @@ class UpdatePersonRequest(BaseModel):
     needs: list[str] | None = None
     is_wishlist: bool | None = None
     embed: bool = False
+
+
+class EnrichPreviewRequest(BaseModel):
+    """Free-text input for the "AI 解析背景" button on the add dialog.
+
+    All fields are optional except (logically) `bio`/`notes`, but the
+    server tolerates an empty body and just returns empty arrays.
+    """
+
+    name: str | None = None
+    bio: str | None = None
+    notes: str | None = None
+    raw_tags: list[str] = []
+    raw_cities: list[str] = []
+    known_companies: list[str] = []
+    known_cities: list[str] = []
+    known_tags: list[str] = []
+
+
+class EnrichDiff(BaseModel):
+    """What the LLM proposed for one person (in addition to existing values)."""
+
+    add_companies: list[str] = []
+    add_cities: list[str] = []
+    add_titles: list[str] = []
+    add_tags: list[str] = []
+    error: str | None = None
+
+
+class EnrichJobState(BaseModel):
+    task_id: str
+    owner_id: int
+    owner_slug: str
+    status: str  # 'pending' | 'running' | 'done' | 'error'
+    only_missing: bool
+    total: int
+    processed: int
+    touched: int
+    errors: int
+    current_name: str | None = None
+    error_message: str | None = None
+    started_at: float
+    finished_at: float | None = None
+    elapsed_seconds: float
+
+
+class EnrichJobStartRequest(BaseModel):
+    only_missing: bool = True
 
 
 class PersonDTO(BaseModel):

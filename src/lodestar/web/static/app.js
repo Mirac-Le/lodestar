@@ -29,8 +29,17 @@ const INDUSTRIES = [
 ];
 
 /* ---------------------------------------- API helpers */
+function withOwner(path) {
+  // /api/owners is owner-agnostic; everything else gets the active slug.
+  if (path.startsWith("/api/owners")) return path;
+  const slug = window.app && window.app.owner;
+  if (!slug) return path;
+  const sep = path.includes("?") ? "&" : "?";
+  return `${path}${sep}owner=${encodeURIComponent(slug)}`;
+}
+
 async function api(path, opts = {}) {
-  const res = await fetch(path, {
+  const res = await fetch(withOwner(path), {
     headers: { "Content-Type": "application/json" },
     ...opts,
     body: opts.body ? JSON.stringify(opts.body) : undefined,
@@ -141,7 +150,7 @@ function buildFocusSummary(raw, nodeEle) {
     || "点击查看完整资料";
 
   let reason = "点击可展开完整资料";
-  if (raw.is_me) reason = "从这里开始，输入目标后点亮路径";
+  if (raw.is_me) reason = "从这里开始，输入需求即可点亮路径";
   else if (raw.needs && raw.needs.length) reason = `他现在可能在找：${raw.needs.slice(0, 2).join(" / ")}`;
   else if (raw.skills && raw.skills.length) reason = `你可以和他聊：${raw.skills.slice(0, 2).join(" / ")}`;
   else if (raw.tags && raw.tags.length) reason = `这个人和 ${raw.tags.slice(0, 2).join(" / ")} 有关`;
@@ -497,6 +506,8 @@ function appState() {
   return {
     /* ---- data ---- */
     graph: { nodes: [], edges: [], me_id: null },
+    owners: [],            // [{slug, display_name, contact_count, ...}]
+    owner: null,           // active owner slug; null until /api/owners resolves
     detail: null,
     paths: [],          // combined results, sorted by combined_score
     indirect: [],       // multi-hop introductions (path_kind == 'indirect')
@@ -515,7 +526,7 @@ function appState() {
     viewMode: "ambient",
     focusedNodeId: null,
     focusSummary: null,
-    ambientHint: "输入目标以点亮路径，或悬停查看局部关系",
+    ambientHint: "输入想找谁/想做什么以点亮路径，或悬停查看局部关系",
     hoverExitTimer: null,
     noLLM: false,
     showFilters: false,
@@ -546,14 +557,64 @@ function appState() {
       embed: true,
     },
 
+    /* ---- AI enrich state ---- */
+    aiPreviewBusy: false,
+    aiPreviewError: null,
+    aiPreviewSummary: null,
+    aiPersonBusy: null,        // detail.id while a per-person reparse is running
+    showBatchEnrich: false,
+    batchOnlyMissing: true,
+    batchStarting: false,
+    batchJob: null,            // last EnrichJobState
+    _batchPollTimer: null,
+
     industriesList: INDUSTRIES,
 
     init() {
       window.app = this;
       this.newPerson = this.emptyPerson();
-      this.loadGraph();
-      this.loadStats();
+      this.bootstrap();
       this.bindShortcuts();
+    },
+
+    async bootstrap() {
+      // /api/owners must complete before anything that fetches owner-scoped
+      // data, otherwise the first /api/graph call would race with no owner
+      // header and the server would silently fall back to the first owner
+      // (correct, but the URL would lose the slug).
+      try {
+        const resp = await api("/api/owners");
+        this.owners = resp.owners || [];
+        // Honour ?owner= in the URL so deep links keep the same tab.
+        const params = new URLSearchParams(window.location.search);
+        const requested = params.get("owner");
+        const match = this.owners.find((o) => o.slug === requested);
+        this.owner = (match && match.slug) || resp.default_slug || null;
+      } catch (e) {
+        this.notify("加载 owner 列表失败：" + e.message, "error");
+      }
+      await this.loadGraph();
+      await this.loadStats();
+    },
+
+    async switchOwner(slug) {
+      if (!slug || slug === this.owner) return;
+      this.owner = slug;
+      // Clear anything that's owner-scoped so the old subgraph doesn't
+      // bleed into the new tab visually before the fetch returns.
+      this.detail = null;
+      this.paths = [];
+      this.indirect = []; this.direct = []; this.weak = []; this.wishlist = [];
+      this.intent = null; this.activePathKey = null;
+      this.searchActive = false; this.focusSummary = null;
+      this.focusedNodeId = null; this.viewMode = "ambient";
+      this.exitTwoPerson();
+      // Mirror the slug in the URL so refresh / share keeps the tab.
+      const url = new URL(window.location.href);
+      url.searchParams.set("owner", slug);
+      window.history.replaceState({}, "", url);
+      await this.loadGraph();
+      await this.loadStats();
     },
 
     emptyPerson() {
@@ -652,7 +713,7 @@ function appState() {
     async runSearch() {
       const q = this.query.trim();
       if (!q) {
-        this.notify("请先输入一句目标，再按 Enter 或点击「查询」", "info", 3200);
+        this.notify("请先输入一句话描述你想找谁、想干什么，再按 Enter 或点击「查询」", "info", 3200);
         return;
       }
       this.searching = true;
@@ -681,7 +742,7 @@ function appState() {
           this.enterAmbientMode();
           const summary = (this.intent || "").trim();
           const hint = summary
-            ? `已理解目标：${summary}。库中暂无匹配路径，可换说法、开启 RAW，或补充联系人简介与标签。`
+            ? `已理解需求：${summary}。库中暂无匹配路径，可换说法、开启 RAW，或补充联系人简介与标签。`
             : "库中暂无匹配路径，可换说法、开启 RAW，或补充联系人简介与标签。";
           this.notify(hint, "info", 5200);
           this.pushHistory(q);
@@ -1115,6 +1176,228 @@ function appState() {
       } catch (e) {
         this.notify(e.message, "error");
       }
+    },
+
+    /* -------- AI enrich helpers -------- */
+
+    /** A: "AI 解析背景" button on the add-contact modal.
+     *
+     * Posts the in-flight form contents to /api/enrich/preview, then
+     * MERGES the LLM proposals into the existing chip strings (we never
+     * overwrite what the user typed by hand). UI feedback lives in
+     * `aiPreviewBusy / aiPreviewError / aiPreviewSummary`.
+     */
+    async aiPreviewForNewPerson() {
+      if (this.aiPreviewBusy) return;
+      const p = this.newPerson;
+      const splitList = (s) => (s || "").split(/[;,；,]/).map((x) => x.trim()).filter(Boolean);
+      const rawTags = splitList(p.tags);
+      const rawCities = splitList(p.cities);
+      const knownCompanies = splitList(p.companies);
+      const knownCities = rawCities.slice();
+      const knownTags = rawTags.slice();
+
+      this.aiPreviewBusy = true;
+      this.aiPreviewError = null;
+      this.aiPreviewSummary = null;
+      try {
+        const diff = await api("/api/enrich/preview", {
+          method: "POST",
+          body: {
+            name: p.name || null,
+            bio: p.bio || null,
+            notes: p.notes || null,
+            raw_tags: rawTags,
+            raw_cities: rawCities,
+            known_companies: knownCompanies,
+            known_cities: knownCities,
+            known_tags: knownTags,
+          },
+        });
+        if (diff.error) {
+          this.aiPreviewError = diff.error;
+          return;
+        }
+        // Merge into the comma-separated string fields. We dedupe
+        // case-sensitively because Chinese strings have no case anyway,
+        // and we don't want to silently downcase company names.
+        const merge = (current, additions) => {
+          const have = new Set(splitList(current));
+          const out = splitList(current);
+          for (const a of additions || []) {
+            if (a && !have.has(a)) {
+              have.add(a);
+              out.push(a);
+            }
+          }
+          return out.join("; ");
+        };
+        p.companies = merge(p.companies, diff.add_companies);
+        p.cities = merge(p.cities, diff.add_cities);
+        // Titles + extra_tags both flow into the tags chip — they're
+        // useful retrieval signal regardless of whether the model
+        // labelled them job-titles or general descriptors.
+        p.tags = merge(p.tags, [...(diff.add_titles || []), ...(diff.add_tags || [])]);
+
+        const counts = [
+          ["公司", (diff.add_companies || []).length],
+          ["城市", (diff.add_cities || []).length],
+          ["职位", (diff.add_titles || []).length],
+          ["标签", (diff.add_tags || []).length],
+        ].filter(([, n]) => n > 0).map(([k, n]) => `${k} +${n}`).join("，");
+        this.aiPreviewSummary = counts ? `已回填：${counts}` : "AI 没有抽到新信息。";
+      } catch (e) {
+        this.aiPreviewError = e.message || "AI 解析失败";
+      } finally {
+        this.aiPreviewBusy = false;
+      }
+    },
+
+    /** C: "AI 重新解析" button in the person detail panel.
+     *
+     * Server-side default is `only_missing=true`, but for an explicit
+     * user action we set it to false so they can force a reparse even
+     * if companies/cities already have values.
+     */
+    async aiReparseCurrent() {
+      if (!this.detail || this.detail.is_me) return;
+      const pid = this.detail.id;
+      this.aiPersonBusy = pid;
+      try {
+        const updated = await api(`/api/enrich/person/${pid}?only_missing=false`, {
+          method: "POST",
+          body: {},
+        });
+        // Hot-swap the detail panel and refresh the graph payload so the
+        // node tooltip / labels reflect the new fields.
+        this.detail = updated;
+        this.notify(`已用 AI 解析「${updated.name}」`);
+        await this.loadGraph();
+      } catch (e) {
+        this.notify(`AI 解析失败：${e.message}`, "error");
+      } finally {
+        this.aiPersonBusy = null;
+      }
+    },
+
+    /** D: "批量 AI 解析" button in the topbar. Opens the modal; doesn't
+     *  auto-start so the user can read the privacy/scope copy first.
+     */
+    openBatchEnrich() {
+      this.showBatchEnrich = true;
+      // Re-attach polling if a job is still running from before this
+      // modal was last closed.
+      if (
+        this.batchJob
+        && (this.batchJob.status === "pending" || this.batchJob.status === "running")
+        && !this._batchPollTimer
+      ) {
+        this._pollBatchJob();
+      }
+    },
+
+    closeBatchEnrich() {
+      this.showBatchEnrich = false;
+      // We DON'T clear _batchPollTimer here — let it keep polling so the
+      // notify() at completion still fires, and so the user reopens to
+      // see the final state.
+    },
+
+    async startBatchEnrich() {
+      if (this.batchStarting) return;
+      this.batchStarting = true;
+      try {
+        const job = await api("/api/enrich/owner", {
+          method: "POST",
+          body: { only_missing: this.batchOnlyMissing },
+        });
+        this.batchJob = job;
+        if (this._batchPollTimer) {
+          clearTimeout(this._batchPollTimer);
+          this._batchPollTimer = null;
+        }
+        this._pollBatchJob();
+      } catch (e) {
+        this.notify(`启动失败：${e.message}`, "error");
+      } finally {
+        this.batchStarting = false;
+      }
+    },
+
+    async _pollBatchJob() {
+      if (!this.batchJob) return;
+      const taskId = this.batchJob.task_id;
+      try {
+        const next = await api(`/api/enrich/status/${taskId}`);
+        // Defend against a newer task being kicked off while we were
+        // mid-poll.
+        if (this.batchJob && this.batchJob.task_id === taskId) {
+          this.batchJob = next;
+          if (next.status === "done" || next.status === "error") {
+            this._batchPollTimer = null;
+            if (next.status === "done") {
+              this.notify(`AI 解析完成：更新 ${next.touched} 条`);
+              await this.loadGraph();
+              await this.loadStats();
+            } else {
+              this.notify(`AI 解析失败：${next.error_message || "未知错误"}`, "error");
+            }
+            return;
+          }
+        }
+      } catch (e) {
+        this.notify(`进度获取失败：${e.message}`, "error");
+        this._batchPollTimer = null;
+        return;
+      }
+      this._batchPollTimer = setTimeout(() => this._pollBatchJob(), 2000);
+    },
+
+    batchProgressPct() {
+      const j = this.batchJob;
+      if (!j || !j.total) return 0;
+      return Math.min(100, Math.round((j.processed / j.total) * 100));
+    },
+
+    batchStatusLabel(s) {
+      return ({
+        pending: "待启动",
+        running: "解析中",
+        done: "已完成",
+        error: "失败",
+      })[s] || s;
+    },
+
+    ownerLabel(slug) {
+      const o = (this.owners || []).find((x) => x.slug === slug);
+      return o ? o.display_name : (slug || "当前用户");
+    },
+
+    /* -------- bio formatting --------
+     * bio 在导入时常是 "key：value · key：value · ..." 这种一行 KV 串。
+     * 如果识别成 KV 序列就返回成对数组，给详情面板渲染成两列网格；
+     * 否则返回 null，调用方按整段文本回退渲染。
+     *
+     * 判定标准：用 `·`（U+00B7 / U+30FB）切分后≥2 段，且其中每段都
+     * 包含一个全角 / 半角冒号；冒号前后非空。
+     */
+    bioPairs(text) {
+      if (!text || typeof text !== "string") return null;
+      const segments = text
+        .split(/[·・]/)               // both U+00B7 and U+30FB
+        .map((s) => s.trim())
+        .filter(Boolean);
+      if (segments.length < 2) return null;
+      const pairs = [];
+      for (const seg of segments) {
+        const m = seg.match(/^([^：:]{1,8})[：:]\s*(.+)$/);
+        if (!m) return null;          // 任何一段不是 K:V 就放弃，避免误识别
+        const key = m[1].trim();
+        const value = m[2].trim();
+        if (!key || !value) return null;
+        pairs.push({ key, value });
+      }
+      return pairs;
     },
 
     /* -------- toast -------- */

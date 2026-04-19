@@ -7,7 +7,7 @@ from pathlib import Path
 import polars as pl
 
 from lodestar.db import Repository
-from lodestar.importers import ExcelImporter, chinese_finance_preset
+from lodestar.importers import ExcelImporter, richard_finance_preset
 
 
 def _make_xlsx(path: Path) -> None:
@@ -31,12 +31,12 @@ def _make_xlsx(path: Path) -> None:
     df.write_excel(path)
 
 
-def test_chinese_finance_preset_roundtrip(repo: Repository, tmp_path: Path) -> None:
+def test_richard_finance_preset_roundtrip(repo: Repository, tmp_path: Path) -> None:
     repo.ensure_me(name="我")
     xlsx_path = tmp_path / "contacts.xlsx"
     _make_xlsx(xlsx_path)
 
-    importer = ExcelImporter(repo, mapping=chinese_finance_preset())
+    importer = ExcelImporter(repo, mapping=richard_finance_preset())
     count = importer.import_file(xlsx_path)
 
     assert count == 4  # four rows processed
@@ -90,19 +90,19 @@ def test_needs_are_searchable(repo: Repository, tmp_path: Path) -> None:
     assert wang.id in hits  # '客户多' also matches '客户'
 
 
-def test_kind_target_sets_wishlist_and_skips_me_edge(
+def test_kind_uncontacted_sets_wishlist_and_skips_me_edge(
     repo: Repository, tmp_path: Path,
 ) -> None:
-    """`关系类型 = 目标` must set Person.is_wishlist=True (curation flag) AND
+    """`关系类型 = 未联系` must set Person.is_wishlist=True (curation flag) AND
     skip the Me-edge (so reach is forced through peers). Earlier the only
     observable signal was the missing edge — the curation intent was lost."""
     from lodestar.importers import ExcelImporter, extended_network_preset
 
     repo.ensure_me(name="我")
     df = pl.DataFrame({
-        "姓名": ["张三", "心愿一号"],
+        "姓名": ["张三", "想认识一号"],
         "所属行业": ["私募", "并购投行"],
-        "关系类型": ["直接", "目标"],
+        "关系类型": ["直接", "未联系"],
         "可信度（言行一致性0-5分）": [4, 0],
     })
     xlsx_path = tmp_path / "wish.xlsx"
@@ -110,13 +110,44 @@ def test_kind_target_sets_wishlist_and_skips_me_edge(
 
     ExcelImporter(repo, mapping=extended_network_preset()).import_file(xlsx_path)
 
-    star = repo.find_person_by_name("心愿一号")
+    star = repo.find_person_by_name("想认识一号")
     assert star is not None
     assert star.is_wishlist is True
     rels = repo.list_relationships()
     assert all(r.target_id != star.id for r in rels), \
-        "wishlist contact must NOT have a Me-edge"
+        "uncontacted (wishlist) contact must NOT have a Me-edge"
 
     zhang = repo.find_person_by_name("张三")
     assert zhang is not None
     assert zhang.is_wishlist is False
+
+
+def test_kind_legacy_target_no_longer_recognised(
+    repo: Repository, tmp_path: Path,
+) -> None:
+    """The pre-2026-04-20 vocabulary (`目标` / `target` / `想认识` / `陌生`)
+    is intentionally not recognised any more — anything other than the
+    documented `未联系` / `uncontacted` / `弱认识` / `weak` / `直接` falls
+    back to the default `direct` kind. This test pins the behavior so we
+    don't silently re-introduce alias drift."""
+    from lodestar.importers import ExcelImporter, extended_network_preset
+
+    repo.ensure_me(name="我")
+    df = pl.DataFrame({
+        "姓名": ["旧词测试"],
+        "所属行业": ["VC"],
+        "关系类型": ["目标"],
+        "可信度（言行一致性0-5分）": [0],
+    })
+    xlsx_path = tmp_path / "legacy.xlsx"
+    df.write_excel(xlsx_path)
+
+    ExcelImporter(repo, mapping=extended_network_preset()).import_file(xlsx_path)
+
+    legacy = repo.find_person_by_name("旧词测试")
+    assert legacy is not None
+    assert legacy.is_wishlist is False, \
+        "legacy '目标' must NOT silently behave as '未联系'"
+    rels = repo.list_relationships()
+    assert any(r.target_id == legacy.id for r in rels), \
+        "legacy '目标' rows now build a default direct Me-edge"

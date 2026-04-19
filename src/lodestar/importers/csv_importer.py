@@ -30,11 +30,12 @@ _LIST_SEPARATOR = ";"
 class CSVImporter:
     """Reads a CSV and upserts each row as a Person + optional Relationship(me, person)."""
 
-    def __init__(self, repo: Repository) -> None:
+    def __init__(self, repo: Repository, owner_id: int | None = None) -> None:
         self._repo = repo
+        self._owner_id = owner_id
 
     def import_file(self, path: str | Path) -> int:
-        me = self._repo.get_me()
+        me = self._repo.get_me(owner_id=self._owner_id)
         if me is None or me.id is None:
             raise RuntimeError("No 'me' record. Run `lodestar init` first.")
 
@@ -68,6 +69,8 @@ class CSVImporter:
             frequency = _parse_frequency(row.get("frequency"))
             context = _or_none(row.get("context"))
             assert saved.id is not None
+            if self._owner_id is not None:
+                self._repo.attach_person_to_owner(saved.id, self._owner_id)
             self._repo.add_relationship(
                 Relationship(
                     source_id=me.id,
@@ -75,7 +78,9 @@ class CSVImporter:
                     strength=strength,
                     context=context,
                     frequency=frequency,
-                )
+                    source="manual",
+                ),
+                owner_id=self._owner_id,
             )
             count += 1
         return count

@@ -23,10 +23,12 @@ DDL_STATEMENTS: tuple[str, ...] = (
         updated_at  TEXT NOT NULL DEFAULT (datetime('now'))
     )
     """,
-    # Exactly one 'me' row allowed.
+    # NOTE: the legacy "exactly one me row" unique index has been removed
+    # so that multiple owners (Richard / Tommy / ...) can each have their
+    # own `is_me=1` row. Per-owner uniqueness is enforced via the `owner`
+    # table's me_person_id column instead.
     """
-    CREATE UNIQUE INDEX IF NOT EXISTS uq_person_is_me
-        ON person(is_me) WHERE is_me = 1
+    DROP INDEX IF EXISTS uq_person_is_me
     """,
     """
     CREATE INDEX IF NOT EXISTS ix_person_name ON person(name)
@@ -109,17 +111,52 @@ DDL_STATEMENTS: tuple[str, ...] = (
         PRIMARY KEY (person_id, need_id)
     )
     """,
+    # ----------------------------------------------------------------
+    # Multi-owner support: each "owner" (Richard / Tommy / ...) has
+    # their own `me` person and their own slice of contacts. Persons
+    # are merged across owners by name so that a shared friend shows
+    # up as the same node in both subgraphs; person_owner records
+    # which contact rows each owner curates.
+    # ----------------------------------------------------------------
+    """
+    CREATE TABLE IF NOT EXISTS owner (
+        id              INTEGER PRIMARY KEY AUTOINCREMENT,
+        slug            TEXT NOT NULL UNIQUE,
+        display_name    TEXT NOT NULL,
+        me_person_id    INTEGER NOT NULL UNIQUE REFERENCES person(id) ON DELETE CASCADE,
+        accent_color    TEXT,
+        position        INTEGER NOT NULL DEFAULT 0,
+        created_at      TEXT NOT NULL DEFAULT (datetime('now'))
+    )
+    """,
+    """
+    CREATE TABLE IF NOT EXISTS person_owner (
+        person_id INTEGER NOT NULL REFERENCES person(id) ON DELETE CASCADE,
+        owner_id  INTEGER NOT NULL REFERENCES owner(id)  ON DELETE CASCADE,
+        PRIMARY KEY (person_id, owner_id)
+    )
+    """,
+    """
+    CREATE INDEX IF NOT EXISTS ix_person_owner_owner ON person_owner(owner_id)
+    """,
     """
     CREATE TABLE IF NOT EXISTS relationship (
         id                 INTEGER PRIMARY KEY AUTOINCREMENT,
         source_id          INTEGER NOT NULL REFERENCES person(id) ON DELETE CASCADE,
         target_id          INTEGER NOT NULL REFERENCES person(id) ON DELETE CASCADE,
+        owner_id           INTEGER REFERENCES owner(id) ON DELETE SET NULL,
         strength           INTEGER NOT NULL DEFAULT 3
                            CHECK (strength BETWEEN 1 AND 5),
         context            TEXT,
         frequency          TEXT NOT NULL DEFAULT 'yearly',
         last_contact       TEXT,
         introduced_by_id   INTEGER REFERENCES person(id) ON DELETE SET NULL,
+        -- Provenance: 'manual' = 用户/CSV/Excel 直接录入；
+        --             'colleague_inferred' = 同公司自动连边；
+        --             'ai_inferred' = LLM L2 抽取出来的关系。
+        -- enrich 重跑时只覆盖 ai_inferred，绝不动其他两类。
+        source             TEXT NOT NULL DEFAULT 'manual'
+                           CHECK (source IN ('manual','colleague_inferred','ai_inferred')),
         created_at         TEXT NOT NULL DEFAULT (datetime('now')),
         CHECK (source_id <> target_id),
         UNIQUE (source_id, target_id)
@@ -130,6 +167,9 @@ DDL_STATEMENTS: tuple[str, ...] = (
     """,
     """
     CREATE INDEX IF NOT EXISTS ix_rel_target ON relationship(target_id)
+    """,
+    """
+    CREATE INDEX IF NOT EXISTS ix_rel_owner ON relationship(owner_id)
     """,
 )
 

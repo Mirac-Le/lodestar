@@ -122,6 +122,47 @@ button { cursor: pointer; }
   flex-shrink: 0;
 }
 
+/* Owner segmented tab — sits between brand and search box.
+   Linear-flavoured: muted track, single elevated active pill, no neon. */
+.owner-tabs {
+  display: inline-flex; align-items: center; gap: 2px;
+  padding: 3px;
+  background: var(--bg-overlay);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  height: 34px;
+  margin-right: 4px;
+}
+.owner-tab {
+  appearance: none; background: transparent; border: 0;
+  display: inline-flex; align-items: center; gap: 8px;
+  padding: 0 12px; height: 26px;
+  font: inherit; font-size: 13px; font-weight: 500;
+  letter-spacing: -0.005em;
+  color: var(--text-muted);
+  border-radius: 6px;
+  cursor: pointer;
+  transition: background 120ms ease, color 120ms ease;
+}
+.owner-tab:hover { color: var(--text-secondary); }
+.owner-tab.is-active {
+  background: rgba(208, 214, 224, 0.10);
+  color: var(--text);
+  box-shadow: 0 0 0 1px rgba(208, 214, 224, 0.18);
+}
+.owner-tab .owner-count {
+  font-variant-numeric: tabular-nums;
+  font-size: 11px;
+  color: var(--text-muted);
+  padding: 1px 6px;
+  border-radius: 4px;
+  background: rgba(255, 255, 255, 0.04);
+}
+.owner-tab.is-active .owner-count {
+  color: var(--text-secondary);
+  background: rgba(255, 255, 255, 0.07);
+}
+
 .search-box {
   flex: 1; max-width: 600px;
   display: flex; align-items: center; gap: 8px;
@@ -594,6 +635,34 @@ button { cursor: pointer; }
 }
 .detail-section .value {
   font-size: 13.5px; color: var(--text); line-height: 1.55;
+}
+
+/* Bio rendered as a key-value list when the source is "key：value · …".
+ * Two-column grid keeps every value left-aligned regardless of key width;
+ * keys get a heavier weight + muted color so they read as legend, not
+ * fighting the value column for emphasis. */
+.bio-kv {
+  margin: 0;
+  display: grid;
+  grid-template-columns: max-content 1fr;
+  column-gap: 14px;
+  row-gap: 4px;
+  font-size: 13.5px;
+  line-height: 1.55;
+}
+.bio-kv-row {
+  display: contents;
+}
+.bio-kv dt {
+  color: var(--text-muted);
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  white-space: nowrap;
+}
+.bio-kv dd {
+  margin: 0;
+  color: var(--text);
+  word-break: break-word;
 }
 .tag {
   display: inline-block; padding: 2px 7px; margin: 0 3px 3px 0;
