@@ -7,7 +7,7 @@ Run:
 The resulting file has three sheets:
 
 * `联系人` — fictional + famous-name contacts with the full extended schema,
-              including the new `关系类型` column (`直接` / `弱认识` / `目标`).
+              including the `关系类型` column (`直接` / `弱认识` / `未联系`).
 * `关系`   — hand-crafted peer edges (overrides any `认识` column
               content of the same pair).
 * `说明`   — human-readable instructions for the person filling it in.
@@ -31,9 +31,9 @@ OUT_PATH = Path(__file__).parent / "demo_network.xlsx"
 # 关系类型 values:
 #   ""       → 直接好友（默认，会建立 Me 强度 = 可信度 的边）
 #   "弱认识" → 仅强度 1 的 Me 边（点头之交）
-#   "目标"   → 不建立 Me 边；只能通过别人提到的 `认识` 抵达
+#   "未联系" → 不建立 Me 边；只能通过别人提到的 `认识` 抵达
 #
-# IMPORTANT: every target person below is referenced by at least 2 direct
+# IMPORTANT: every "未联系" person below is referenced by at least 2 direct
 # friends in their `认识` column, so multi-hop paths exist.
 PEOPLE: list[tuple[int, str, str, str, str, str, str, int, str, str, str, str]] = [
     # ---- Cluster A: 头部量化私募「沧海资本」（紧密团队 + 校友网）----
@@ -165,39 +165,39 @@ PEOPLE: list[tuple[int, str, str, str, str, str, str, int, str, str, str, str]] 
      "前投行;嘴甜;项目敏感度高", 3, "并购买方",
      "何文博(5,同业); 刘思敏(3,合作); 沈南鹏(1,FA 拜访过红杉)", "", ""),
 
-    # ============ TARGET PERSONS（你不直接认识，但圈内有人能引荐）============
-    # All `关系类型 = 目标`. They will NOT have a Me-edge. The system reaches
+    # ============ 「未联系」人物（你不直接认识，但圈内有人能引荐）============
+    # All `关系类型 = 未联系`. They will NOT have a Me-edge. The system reaches
     # them via the `认识` references in the rows above.
     (30, "沈南鹏", "风险投资", "红杉资本中国",
      "创始及执行合伙人", "上海/香港",
      "投资界第一; 携程系; 早期 BAT 投资人; 极少见生人", 0,
      "高质量项目源; 长期 LP 关系", "",
-     "目标人物 · 圈内可引荐", "目标"),
+     "想接触 · 圈内可引荐", "未联系"),
     (31, "张磊", "私募基金", "高瓴资本", "创始人 / CEO", "北京/香港",
      "中国 PE 一哥; 耶鲁背景; 长期主义; 大单局; 极少见生人", 0,
      "顶级管理人协同; 大型并购 deal", "",
-     "目标人物 · 圈内可引荐", "目标"),
+     "想接触 · 圈内可引荐", "未联系"),
     (32, "朱啸虎", "风险投资", "金沙江创投", "主管合伙人", "上海",
      "TMT 早期投资人; 风格高调; 滴滴/小红书早期投资; 媒体活跃", 0,
      "新风口 deal flow", "",
-     "目标人物 · 圈内可引荐", "目标"),
+     "想接触 · 圈内可引荐", "未联系"),
     (33, "雷军", "互联网", "小米集团", "创始人 / CEO / 董事长", "北京",
      "顺为资本合伙人; 武大毕业; 工程师创始人; 生态投资活跃", 0,
      "硬科技/IoT/汽车上下游", "",
-     "目标人物 · 圈内可引荐", "目标"),
+     "想接触 · 圈内可引荐", "未联系"),
     (34, "张一鸣", "互联网", "字节跳动", "创始人 (已退任 CEO)", "北京/新加坡",
      "南开毕业; 工程师出身; 极度低调; 算法信仰", 0,
      "AI 应用方向 deal; 字节系协同", "",
-     "目标人物 · 圈内可引荐", "目标"),
+     "想接触 · 圈内可引荐", "未联系"),
     (35, "段永平", "投资人", "OPPO/vivo 系 / 步步高",
      "实际控制人 / 投资人", "美国/广州",
      "教父级实业家; 价值投资; 苹果/茅台/腾讯重仓; 极少公开露面", 0,
      "长期价值标的; 跨境配置", "",
-     "目标人物 · 圈内可引荐", "目标"),
+     "想接触 · 圈内可引荐", "未联系"),
     (36, "邱国鹭", "私募基金", "高毅资产", "董事长", "上海",
      "原南方基金投资总监; 价值派; 著有《投资中最简单的事》", 0,
      "成熟管理人合作", "",
-     "目标人物 · 圈内可引荐", "目标"),
+     "想接触 · 圈内可引荐", "未联系"),
 ]
 
 # --------------------------------------------------------------------- edges
@@ -222,7 +222,7 @@ RELATIONS: list[tuple[str, str, int, str, str]] = [
     ("赵大山", "姚远",   2, "保险配置顾问", "yearly"),
     ("简宁",   "郭博",   3, "医药并购 deal", "monthly"),
 
-    # ---- 通往「目标人物」的高信号边（强度高一点，便于路径聚焦）----
+    # ---- 通往「未联系」人物的高信号边（强度高一点，便于路径聚焦）----
     ("陈维国", "沈南鹏", 3, "中金时多次合作（项目顾问）",      "yearly"),
     ("何文博", "沈南鹏", 3, "红杉 LP/IR 圈饭局",              "yearly"),
     ("吴翰林", "张磊",   3, "高瓴尽调访谈、行业闭门",          "yearly"),
@@ -261,7 +261,7 @@ def build() -> Path:
     cell_target = wb.add_format({
         "font_name": "PingFang SC", "font_size": 10, "valign": "top",
         "text_wrap": True, "border": 1, "border_color": "#e5e7eb",
-        "bg_color": "#fef3c7",  # 浅金色：目标人物高亮
+        "bg_color": "#fef3c7",  # 浅金色：「未联系」高亮
     })
     cell_mono_target = wb.add_format({
         "font_name": "JetBrains Mono", "font_size": 10, "valign": "top",
@@ -296,7 +296,7 @@ def build() -> Path:
     for row_i, p in enumerate(PEOPLE, start=1):
         (idx, name, industry, company, role, city, feats, trust,
          needs, peers, notes, kind) = p
-        is_target = kind.strip() in {"目标", "target"}
+        is_target = kind.strip() == "未联系"
         text_fmt = cell_target if is_target else cell_fmt
         mono_fmt = cell_mono_target if is_target else cell_mono
         ws.write(row_i, 0, idx, mono_fmt)
@@ -342,13 +342,14 @@ def build() -> Path:
         ("", "• 所有『行业/公司/城市/需求』支持多值，用 `;` `，` 或 `、` 分隔都行。"),
         ("", "• 没数据的格留空就行，不要填 `-` `无` `NA`。"),
 
-        ("2. 关键列：关系类型 ⭐ 新增", ""),
-        ("", "三选一，决定『你』和此人之间是否建立直接好友关系："),
+        ("2. 关键列：关系类型", ""),
+        ("", "三选一，决定『你』和此人之间是否建立直接好友关系（**不影响搜索本身**——"),
+        ("", "搜索按相关性排序，任何人都可能是你下次自然语言查询的最佳匹配）："),
         ("", "• 留空 / 直接 — 默认。把『可信度』作为 Me→此人的边强度。"),
         ("", "• 弱认识 — 仅强度 1 的边。点头之交、刚加微信、被介绍认识但未深交。"),
-        ("", "• 目标   — 你不直接认识此人，但希望被引荐到。系统会通过别人的"),
-        ("", "          『认识』列推算 2-3 跳的最优引荐路径。Demo 表里"),
-        ("", "          沈南鹏/张磊/朱啸虎/雷军/张一鸣/段永平/邱国鹭 都是这种。"),
+        ("", "• 未联系 — 你还没直接联系到此人，但希望被引荐到。系统会通过别人的"),
+        ("", "           『认识』列推算 2-3 跳的最优引荐路径。Demo 表里"),
+        ("", "           沈南鹏/张磊/朱啸虎/雷军/张一鸣/段永平/邱国鹭 都是这种。"),
 
         ("3. 关键列：认识", ""),
         ("", "把此人认识的其他人写进来。格式：用 `;` 分隔，每一项可以附加强度(1-5)和关系描述。"),
@@ -358,7 +359,7 @@ def build() -> Path:
         ("", "• 数字和描述顺序不限，用逗号分开"),
         ("", "• 只需写一个方向：你写了 'A→B'，导入器会自动建立双向边"),
         ("", "• 如果填的人不在表里，导入时会警告并跳过"),
-        ("", "• ★ 想被引荐到某个『目标』，就在中间人那一行的『认识』里写上目标人物。"),
+        ("", "• ★ 想被引荐到某个『未联系』的人，就在中间人那一行的『认识』里写上他。"),
 
         ("4. 关键列：公司", ""),
         ("", "同一家公司的人会自动被视为同事（强度 4）。这是最高效的补边机制。"),
@@ -366,7 +367,7 @@ def build() -> Path:
 
         ("5. 可信度", ""),
         ("", "1-5 分。1 = 认识但不熟；3 = 普通朋友；5 = 核心挚友/铁磁。"),
-        ("", "对『目标』类型的人填 0 即可（系统忽略）。"),
+        ("", "对『未联系』类型的人填 0 即可（系统忽略）。"),
 
         ("6. 潜在需求", ""),
         ("", "这个人在找什么。系统会用来做『引荐』—— 你可以介绍 A 给 B 当对方的供给方。"),
@@ -399,7 +400,7 @@ def build() -> Path:
 
 if __name__ == "__main__":
     path = build()
-    n_targets = sum(1 for p in PEOPLE if p[-1].strip() in {"目标", "target"})
+    n_targets = sum(1 for p in PEOPLE if p[-1].strip() == "未联系")
     print(f"Wrote {path}  ({path.stat().st_size // 1024} KB)")
-    print(f"  · {len(PEOPLE)} people  (含 {n_targets} 个目标人物)")
+    print(f"  · {len(PEOPLE)} people  (含 {n_targets} 个『未联系』人物)")
     print(f"  · {len(RELATIONS)} authoritative edges in 关系 sheet")
