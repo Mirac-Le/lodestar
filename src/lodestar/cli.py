@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from getpass import getpass
 from pathlib import Path
 from typing import Annotated
 
@@ -119,6 +120,45 @@ def owner_list() -> None:
         n = len(repo.list_people(owner_id=o.id))
         table.add_row(o.slug, o.display_name, str(o.me_person_id), str(n))
     console.print(table)
+
+
+@owner_app.command("web-password")
+def owner_web_password(
+    slug: Annotated[str, typer.Argument(help="Owner slug, e.g. richard.")],
+    new_password: Annotated[
+        str | None,
+        typer.Option("--set", help="New password (omit to type interactively)."),
+    ] = None,
+    clear: Annotated[
+        bool, typer.Option("--clear", help="Remove the web UI lock for this owner.")
+    ] = False,
+) -> None:
+    """Set or clear the password for an owner's tab in the web UI (`serve`)."""
+    repo, _ = _open_repo()
+    owner = repo.get_owner_by_slug(slug)
+    if owner is None or owner.id is None:
+        console.print(f"[red]Owner '{slug}' not found.[/red]")
+        raise typer.Exit(1)
+    if clear:
+        repo.set_owner_web_password(owner.id, None)
+        console.print(
+            f"[green]Removed web lock for[/green] [cyan]{slug}[/cyan]."
+        )
+        return
+    pw = new_password
+    if not pw:
+        pw = getpass("New web password: ")
+        pw2 = getpass("Again: ")
+        if pw != pw2:
+            console.print("[red]Passwords do not match.[/red]")
+            raise typer.Exit(1)
+    if not pw:
+        console.print(
+            "[red]Empty password; use [bold]--clear[/bold] to remove lock.[/red]"
+        )
+        raise typer.Exit(1)
+    repo.set_owner_web_password(owner.id, pw)
+    console.print(f"[green]Web password set for[/green] [cyan]{slug}[/cyan].")
 
 
 # -------------------------------------------------------------------- reset

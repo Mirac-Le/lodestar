@@ -43,6 +43,10 @@ class GraphPayload(BaseModel):
     nodes: list[GraphNode]
     edges: list[GraphEdge]
     me_id: int
+    weak_me_floor: int = Field(
+        default=4, ge=1, le=5,
+        description="Same as PathFinder: Me edges below this are weak for graph viz.",
+    )
     owner_slug: str | None = None
     owner_display_name: str | None = None
 
@@ -57,11 +61,22 @@ class OwnerDTO(BaseModel):
     accent_color: str | None = None
     contact_count: int = 0
     is_default: bool = False
+    web_locked: bool = False
 
 
 class OwnersResponse(BaseModel):
     owners: list[OwnerDTO]
     default_slug: str | None = None
+
+
+class OwnerUnlockRequest(BaseModel):
+    slug: str
+    password: str = ""
+
+
+class OwnerUnlockResponse(BaseModel):
+    token: str
+    unlocked: bool = True
 
 
 class PathStepDTO(BaseModel):

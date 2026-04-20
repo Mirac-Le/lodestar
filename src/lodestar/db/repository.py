@@ -112,7 +112,25 @@ class Repository:
             me_person_id=int(row["me_person_id"]),
             accent_color=_row_get(row, "accent_color", None),
             position=int(_row_get(row, "position", 0)),
+            web_password_hash=_row_get(row, "web_password_hash", None),
         )
+
+    def set_owner_web_password(self, owner_id: int, plain: str | None) -> None:
+        """Set or clear per-owner web UI password (stored as hash)."""
+        with self.conn:
+            if plain is None or plain == "":
+                self.conn.execute(
+                    "UPDATE owner SET web_password_hash = NULL WHERE id = ?",
+                    (owner_id,),
+                )
+            else:
+                from lodestar.web.owner_unlock import hash_web_password
+
+                h = hash_web_password(plain)
+                self.conn.execute(
+                    "UPDATE owner SET web_password_hash = ? WHERE id = ?",
+                    (h, owner_id),
+                )
 
     # ------------------------------------------------------------------ Me
     def get_me(self, owner_id: int | None = None) -> Person | None:

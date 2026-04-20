@@ -4,13 +4,44 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1">
   <title>Lodestar — Personal Network Navigator</title>
-  <link rel="stylesheet" href="/static/style.css?v=20260420-pathfix">
+  <link rel="stylesheet" href="/static/style.css?v=20260420-owner-tabs-above-modal">
   <script src="/static/cytoscape.min.js"></script>
   <script src="/static/echarts.min.js"></script>
-  <script defer src="/static/app.js?v=20260420-pathfix"></script>
+  <script defer src="/static/app.js?v=20260420-owner-tabs-above-modal"></script>
   <script defer src="/static/alpine.min.js"></script>
 </head>
 <body x-data="appState()" x-init="init()" :class="searching ? 'searching' : ''">
+
+  <template x-if="showOwnerUnlockModal">
+    <div class="modal-bg owner-unlock-bg">
+      <div class="modal owner-unlock-modal" @click.stop>
+        <h2>解锁网络</h2>
+        <p>
+          <span class="mono" x-text="ownerUnlockSlug"></span>
+          已设置网页密码，请输入后继续。
+        </p>
+        <div class="field">
+          <label for="owner-unlock-pw">密码</label>
+          <input id="owner-unlock-pw" type="password"
+                 x-model="ownerUnlockPassword"
+                 @keydown.enter="submitOwnerUnlock()"
+                 autocomplete="current-password"
+                 placeholder="输入密码">
+        </div>
+        <template x-if="ownerUnlockError">
+          <p class="unlock-error" x-text="ownerUnlockError"></p>
+        </template>
+        <div class="modal-actions">
+          <button type="button" class="btn" @click="cancelOwnerUnlock()">取消</button>
+          <button type="button" class="btn primary"
+                  :disabled="ownerUnlockBusy"
+                  @click="submitOwnerUnlock()">
+            <span x-text="ownerUnlockBusy ? '校验中…' : '解锁'"></span>
+          </button>
+        </div>
+      </div>
+    </div>
+  </template>
 
   <!-- ============================================================
        Inline SVG icon sprite
@@ -85,6 +116,7 @@
             :aria-selected="owner === o.slug"
             @click="switchOwner(o.slug)">
             <span class="owner-name" x-text="o.display_name"></span>
+            <span class="owner-lock" x-show="o.web_locked" title="已设置网页密码">锁</span>
             <span class="owner-count" x-text="o.contact_count"></span>
           </button>
         </template>
@@ -298,6 +330,7 @@
 
   <template x-if="focusSummary && viewMode === 'focus' && !detail">
     <div class="panel panel-focus">
+      <div class="focus-kicker">速览</div>
       <div class="focus-header">
         <div class="avatar"
              :style="`background:${focusSummary.color}20; color:${focusSummary.color}; border-color:${focusSummary.color}40;`"
@@ -307,20 +340,24 @@
           <div class="industry" x-text="focusSummary.industry"></div>
         </div>
       </div>
+      <div class="focus-headline" x-text="focusSummary.headline"></div>
+      <div class="focus-reason" x-text="focusSummary.reason"></div>
       <template x-if="focusSummary.strength">
-        <div class="focus-row">
-          <span>关系强度</span>
-          <span class="mono" x-text="`${focusSummary.strength}/5`"></span>
+        <div class="focus-meter-row">
+          <span class="focus-meter-label">可信度</span>
+          <div class="bars bars-compact">
+            <template x-for="i in 5" :key="i">
+              <div class="bar" :class="i <= focusSummary.strength ? 'on' : ''"></div>
+            </template>
+          </div>
         </div>
       </template>
-      <div class="focus-copy" x-text="focusSummary.snippet"></div>
-      <div class="focus-reason" x-text="focusSummary.reason"></div>
-      <div class="focus-row">
-        <span>局部关系</span>
-        <span class="mono" x-text="`${focusSummary.neighborCount} 个邻居`"></span>
+      <div class="focus-row focus-row-quiet">
+        <span>图上邻居</span>
+        <span class="mono" x-text="`${focusSummary.neighborCount}`"></span>
       </div>
-      <div class="detail-actions">
-        <button class="btn" @click="focusNode(focusSummary.id)">查看资料</button>
+      <div class="detail-actions focus-actions">
+        <button class="btn btn-primary-soft" @click="focusNode(focusSummary.id)">打开档案</button>
       </div>
     </div>
   </template>
@@ -331,6 +368,7 @@
       <button class="close" @click="clearDetail()">
         <svg width="12" height="12"><use href="#i-close"/></svg>
       </button>
+      <div class="detail-kicker">联系人档案</div>
       <div class="detail-header">
         <div class="avatar"
              :style="`background:${detail.color}20; color:${detail.color}; border-color:${detail.color}40;`"
@@ -393,14 +431,14 @@
         </div>
       </template>
 
-      <template x-if="detail.companies && detail.companies.length">
+      <template x-if="detail.companies && detail.companies.length && detailShowExtraCompany(detail)">
         <div class="detail-section">
           <div class="label">公司</div>
           <div class="value" x-text="detail.companies.join(' · ')"></div>
         </div>
       </template>
 
-      <template x-if="detail.cities && detail.cities.length">
+      <template x-if="detail.cities && detail.cities.length && detailShowExtraCity(detail)">
         <div class="detail-section">
           <div class="label">城市</div>
           <div class="value" x-text="detail.cities.join(' · ')"></div>

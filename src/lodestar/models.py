@@ -36,6 +36,8 @@ class Owner(BaseModel):
     me_person_id: int
     accent_color: str | None = None
     position: int = 0
+    # 网页标签页锁：非空则 /api 下除 list/unlock 外需带 X-Owner-Unlock
+    web_password_hash: str | None = None
 
 
 class Person(BaseModel):

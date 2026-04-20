@@ -6,9 +6,10 @@ from collections import Counter
 from collections.abc import Iterator
 from contextlib import contextmanager
 from pathlib import Path
+from typing import Annotated
 
 import networkx as nx
-from fastapi import Depends, FastAPI, HTTPException, Query
+from fastapi import Depends, FastAPI, Header, HTTPException, Query
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 
@@ -28,6 +29,12 @@ from lodestar.models import (
 from lodestar.search import HybridSearch, PathFinder
 from lodestar.viz.pyvis_export import infer_industry
 from lodestar.web import enrich_jobs
+from lodestar.web.owner_unlock import (
+    assert_owner_web_access,
+    mint_unlock_token,
+    unlock_secret_bytes,
+    verify_web_password,
+)
 from lodestar.web.schemas import (
     CreatePersonRequest,
     EnrichDiff,
@@ -41,10 +48,11 @@ from lodestar.web.schemas import (
     IntroductionSuggestion,
     OwnerDTO,
     OwnersResponse,
+    OwnerUnlockRequest,
+    OwnerUnlockResponse,
     PathResultDTO,
     PathStepDTO,
     PersonDTO,
-    ProposedEdge as ProposedEdgeDTO,
     RelationshipApplyRequest,
     RelationshipApplyResponse,
     RelationshipDTO,
@@ -58,6 +66,9 @@ from lodestar.web.schemas import (
     TwoPersonPathRequest,
     TwoPersonPathResponse,
     UpdatePersonRequest,
+)
+from lodestar.web.schemas import (
+    ProposedEdge as ProposedEdgeDTO,
 )
 
 STATIC_DIR = Path(__file__).parent / "static"
@@ -227,6 +238,56 @@ def _resolve_owner(repo: Repository, slug: str | None) -> Owner:
     raise HTTPException(404, f"Unknown owner '{slug}'.")
 
 
+def verified_owner(
+    owner: str | None = Query(None),
+    x_owner_unlock: str | None = Header(default=None, alias="X-Owner-Unlock"),
+    repo: Repository = Depends(get_repo),
+) -> Owner:
+    o = _resolve_owner(repo, owner)
+    assert_owner_web_access(o, x_owner_unlock, unlock_secret_bytes())
+    return o
+
+
+def _person_dto(repo: Repository, owner_obj: Owner, pid: int) -> PersonDTO:
+    person = repo.get_person(pid)
+    if person is None:
+        raise HTTPException(404, f"Person {pid} not found")
+    assert owner_obj.id is not None
+    me = repo.get_me(owner_id=owner_obj.id)
+    rels = repo.list_relationships(owner_id=owner_obj.id)
+    s2me = _strength_to_me(rels, me.id) if me and me.id else {}
+    if person.is_me:
+        industry, color, glow = "我", "#f7f8f8", "#9ca4ae"
+    else:
+        industry, color, glow = infer_industry(person)
+
+    related = []
+    for r in rels:
+        other_id = (
+            r.target_id if r.source_id == pid
+            else r.source_id if r.target_id == pid
+            else None
+        )
+        if other_id is None:
+            continue
+        other = repo.get_person(other_id)
+        if not other:
+            continue
+        related.append({
+            "id": other.id,
+            "name": other.name,
+            "strength": r.strength,
+            "context": r.context or "",
+            "frequency": r.frequency.value,
+        })
+    related.sort(key=lambda x: -x["strength"])  # type: ignore[arg-type, return-value]
+
+    return PersonDTO.from_person(
+        person, industry, color, glow,
+        s2me.get(pid), related,
+    )
+
+
 # ---------------------------------------------------------------- app
 def create_app() -> FastAPI:
     app = FastAPI(
@@ -260,16 +321,40 @@ def create_app() -> FastAPI:
                 id=o.id, slug=o.slug, display_name=o.display_name,
                 me_person_id=o.me_person_id, accent_color=o.accent_color,
                 contact_count=count, is_default=(o.slug == default_slug),
+                web_locked=bool(o.web_password_hash),
             ))
         return OwnersResponse(owners=out, default_slug=default_slug)
+
+    @app.post("/api/owners/unlock", response_model=OwnerUnlockResponse)
+    def unlock_owner(
+        body: OwnerUnlockRequest,
+        repo: Repository = Depends(get_repo),
+    ) -> OwnerUnlockResponse:
+        o = repo.get_owner_by_slug(body.slug)
+        if o is None:
+            raise HTTPException(404, f"Unknown owner '{body.slug}'.")
+        secret = unlock_secret_bytes()
+        if not o.web_password_hash:
+            return OwnerUnlockResponse(
+                token=mint_unlock_token(o.slug, secret),
+                unlocked=True,
+            )
+        if not verify_web_password(body.password, o.web_password_hash):
+            raise HTTPException(
+                401,
+                detail={"code": "bad_password", "message": "密码错误"},
+            )
+        return OwnerUnlockResponse(
+            token=mint_unlock_token(o.slug, secret),
+            unlocked=True,
+        )
 
     # ---------- graph
     @app.get("/api/graph", response_model=GraphPayload)
     def get_graph(
-        owner: str | None = Query(None),
+        owner_obj: Annotated[Owner, Depends(verified_owner)],
         repo: Repository = Depends(get_repo),
     ) -> GraphPayload:
-        owner_obj = _resolve_owner(repo, owner)
         assert owner_obj.id is not None
         me = repo.get_me(owner_id=owner_obj.id)
         if me is None or me.id is None:
@@ -289,8 +374,10 @@ def create_app() -> FastAPI:
             )
             for r in rels
         ]
+        settings = get_settings()
         return GraphPayload(
             nodes=nodes, edges=edges, me_id=me.id,
+            weak_me_floor=settings.weak_me_floor,
             owner_slug=owner_obj.slug,
             owner_display_name=owner_obj.display_name,
         )
@@ -299,13 +386,12 @@ def create_app() -> FastAPI:
     @app.post("/api/search", response_model=SearchResponse)
     def search(
         body: SearchRequest,
-        owner: str | None = Query(None),
+        owner_obj: Annotated[Owner, Depends(verified_owner)],
         repo: Repository = Depends(get_repo),
     ) -> SearchResponse:
         if not body.goal.strip():
             raise HTTPException(400, "Empty goal")
         settings = get_settings()
-        owner_obj = _resolve_owner(repo, owner)
         if body.no_llm:
             intent = GoalIntent(
                 original=body.goal, keywords=[body.goal], summary=body.goal,
@@ -378,56 +464,18 @@ def create_app() -> FastAPI:
     @app.get("/api/people/{pid}", response_model=PersonDTO)
     def get_person(
         pid: int,
-        owner: str | None = Query(None),
+        owner_obj: Annotated[Owner, Depends(verified_owner)],
         repo: Repository = Depends(get_repo),
     ) -> PersonDTO:
-        person = repo.get_person(pid)
-        if person is None:
-            raise HTTPException(404, f"Person {pid} not found")
-        owner_obj = _resolve_owner(repo, owner)
-        assert owner_obj.id is not None
-        me = repo.get_me(owner_id=owner_obj.id)
-        rels = repo.list_relationships(owner_id=owner_obj.id)
-        s2me = _strength_to_me(rels, me.id) if me and me.id else {}
-        if person.is_me:
-            industry, color, glow = "我", "#f7f8f8", "#9ca4ae"
-        else:
-            industry, color, glow = infer_industry(person)
-
-        related = []
-        for r in rels:
-            other_id = (
-                r.target_id if r.source_id == pid
-                else r.source_id if r.target_id == pid
-                else None
-            )
-            if other_id is None:
-                continue
-            other = repo.get_person(other_id)
-            if not other:
-                continue
-            related.append({
-                "id": other.id,
-                "name": other.name,
-                "strength": r.strength,
-                "context": r.context or "",
-                "frequency": r.frequency.value,
-            })
-        related.sort(key=lambda x: -x["strength"])  # type: ignore[arg-type, return-value]
-
-        return PersonDTO.from_person(
-            person, industry, color, glow,
-            s2me.get(pid), related,
-        )
+        return _person_dto(repo, owner_obj, pid)
 
     # ---------- create
     @app.post("/api/people", response_model=PersonDTO)
     def create_person(
         body: CreatePersonRequest,
-        owner: str | None = Query(None),
+        owner_obj: Annotated[Owner, Depends(verified_owner)],
         repo: Repository = Depends(get_repo),
     ) -> PersonDTO:
-        owner_obj = _resolve_owner(repo, owner)
         assert owner_obj.id is not None
         me = repo.get_me(owner_id=owner_obj.id)
         if me is None or me.id is None:
@@ -462,7 +510,7 @@ def create_app() -> FastAPI:
     @app.patch("/api/people/{pid}", response_model=PersonDTO)
     def update_person(
         pid: int, body: UpdatePersonRequest,
-        owner: str | None = Query(None),
+        owner_obj: Annotated[Owner, Depends(verified_owner)],
         repo: Repository = Depends(get_repo),
     ) -> PersonDTO:
         existing = repo.get_person(pid)
@@ -491,7 +539,7 @@ def create_app() -> FastAPI:
                 repo.upsert_embedding(pid, vec)
             except Exception:
                 pass
-        return get_person(pid, owner=owner, repo=repo)
+        return _person_dto(repo, owner_obj, pid)
 
     # ---------- delete
     @app.delete("/api/people/{pid}")
@@ -503,11 +551,10 @@ def create_app() -> FastAPI:
     @app.post("/api/path", response_model=TwoPersonPathResponse)
     def find_paths(
         body: TwoPersonPathRequest,
-        owner: str | None = Query(None),
+        owner_obj: Annotated[Owner, Depends(verified_owner)],
         repo: Repository = Depends(get_repo),
     ) -> TwoPersonPathResponse:
         settings = get_settings()
-        owner_obj = _resolve_owner(repo, owner)
         rels = repo.list_relationships(owner_id=owner_obj.id)
         g: nx.Graph = nx.Graph()
         for r in rels:
@@ -564,10 +611,9 @@ def create_app() -> FastAPI:
     # ---------- introductions you could broker
     @app.get("/api/introductions", response_model=IntroductionsResponse)
     def introductions(
-        owner: str | None = Query(None),
+        owner_obj: Annotated[Owner, Depends(verified_owner)],
         repo: Repository = Depends(get_repo),
     ) -> IntroductionsResponse:
-        owner_obj = _resolve_owner(repo, owner)
         people = repo.list_people(owner_id=owner_obj.id)
         suggestions: list[IntroductionSuggestion] = []
         for seeker in people:
@@ -612,7 +658,7 @@ def create_app() -> FastAPI:
     @app.post("/api/enrich/preview", response_model=EnrichDiff)
     def enrich_preview(
         body: EnrichPreviewRequest,
-        owner: str | None = Query(None),
+        owner_obj: Annotated[Owner, Depends(verified_owner)],
         repo: Repository = Depends(get_repo),
     ) -> EnrichDiff:
         """A: 添加联系人对话框里的"AI 解析背景"按钮入口。
@@ -623,7 +669,6 @@ def create_app() -> FastAPI:
         """
         from lodestar.enrich import L1Extractor, LLMClient, LLMError
 
-        owner_obj = _resolve_owner(repo, owner)
         assert owner_obj.id is not None
         try:
             client = LLMClient()
@@ -654,7 +699,7 @@ def create_app() -> FastAPI:
     @app.post("/api/enrich/person/{pid}", response_model=PersonDTO)
     def enrich_person(
         pid: int,
-        owner: str | None = Query(None),
+        owner_obj: Annotated[Owner, Depends(verified_owner)],
         only_missing: bool = Query(True),
         repo: Repository = Depends(get_repo),
     ) -> PersonDTO:
@@ -671,12 +716,11 @@ def create_app() -> FastAPI:
         if person.is_me:
             raise HTTPException(400, "不能对 me 节点跑 enrich")
 
-        owner_obj = _resolve_owner(repo, owner)
         assert owner_obj.id is not None
 
         if only_missing and bool(person.companies) and bool(person.cities):
             # Nothing to do; just return the existing person.
-            return get_person(pid, owner=owner, repo=repo)
+            return _person_dto(repo, owner_obj, pid)
 
         try:
             client = LLMClient()
@@ -689,12 +733,12 @@ def create_app() -> FastAPI:
             raise HTTPException(502, f"LLM 调用失败：{exc}") from exc
         if not diff.error and not diff.is_empty():
             extractor.apply([diff])
-        return get_person(pid, owner=owner, repo=repo)
+        return _person_dto(repo, owner_obj, pid)
 
     @app.post("/api/enrich/owner", response_model=EnrichJobState)
     def enrich_owner_start(
         body: EnrichJobStartRequest,
-        owner: str | None = Query(None),
+        owner_obj: Annotated[Owner, Depends(verified_owner)],
         repo: Repository = Depends(get_repo),
     ) -> EnrichJobState:
         """D: 顶栏"批量 AI 解析"入口。
@@ -703,7 +747,6 @@ def create_app() -> FastAPI:
         task_id（不会并行启动两个）。前端用 GET /api/enrich/status/{id}
         每 2 秒拉一次进度。
         """
-        owner_obj = _resolve_owner(repo, owner)
         assert owner_obj.id is not None
         # Ensure the LLM client can be constructed before launching the
         # worker — otherwise the user would only see the failure via
@@ -746,7 +789,7 @@ def create_app() -> FastAPI:
 
     @app.get("/api/relationships", response_model=RelationshipListResponse)
     def list_relationships_endpoint(
-        owner: str | None = Query(None),
+        owner_obj: Annotated[Owner, Depends(verified_owner)],
         q: str | None = Query(None),
         min_strength: int | None = Query(None, ge=1, le=5),
         source: str | None = Query(
@@ -762,7 +805,6 @@ def create_app() -> FastAPI:
         limit: int = Query(100, ge=1, le=500),
         repo: Repository = Depends(get_repo),
     ) -> RelationshipListResponse:
-        owner_obj = _resolve_owner(repo, owner)
         assert owner_obj.id is not None
         name_lookup, me_id = _owner_name_lookup(repo, owner_obj.id)
         rels = repo.list_relationships(owner_id=owner_obj.id)
@@ -811,13 +853,12 @@ def create_app() -> FastAPI:
     @app.post("/api/relationships/parse", response_model=RelationshipParseResponse)
     def parse_relationships(
         body: RelationshipParseRequest,
-        owner: str | None = Query(None),
+        owner_obj: Annotated[Owner, Depends(verified_owner)],
         repo: Repository = Depends(get_repo),
     ) -> RelationshipParseResponse:
         """NL → 关系提案。不写库，只返回提案 + 上下文，让前端确认。"""
         from lodestar.enrich import LLMClient, LLMError, RelationshipParser
 
-        owner_obj = _resolve_owner(repo, owner)
         assert owner_obj.id is not None
         try:
             client = LLMClient()
@@ -878,10 +919,9 @@ def create_app() -> FastAPI:
     )
     def apply_relationships(
         body: RelationshipApplyRequest,
-        owner: str | None = Query(None),
+        owner_obj: Annotated[Owner, Depends(verified_owner)],
         repo: Repository = Depends(get_repo),
     ) -> RelationshipApplyResponse:
-        owner_obj = _resolve_owner(repo, owner)
         assert owner_obj.id is not None
         owner_pids = repo.list_owner_person_ids(owner_obj.id)
         name_lookup, me_id = _owner_name_lookup(repo, owner_obj.id)
@@ -920,10 +960,9 @@ def create_app() -> FastAPI:
     def update_relationship(
         rel_id: int,
         body: RelationshipUpdateRequest,
-        owner: str | None = Query(None),
+        owner_obj: Annotated[Owner, Depends(verified_owner)],
         repo: Repository = Depends(get_repo),
     ) -> RelationshipDTO:
-        owner_obj = _resolve_owner(repo, owner)
         assert owner_obj.id is not None
         rels = repo.list_relationships(owner_id=owner_obj.id)
         target = next((r for r in rels if r.id == rel_id), None)
@@ -948,10 +987,9 @@ def create_app() -> FastAPI:
     @app.delete("/api/relationships/{rel_id}")
     def delete_relationship(
         rel_id: int,
-        owner: str | None = Query(None),
+        owner_obj: Annotated[Owner, Depends(verified_owner)],
         repo: Repository = Depends(get_repo),
     ) -> dict:
-        owner_obj = _resolve_owner(repo, owner)
         assert owner_obj.id is not None
         rels = repo.list_relationships(owner_id=owner_obj.id)
         target = next((r for r in rels if r.id == rel_id), None)
@@ -964,10 +1002,9 @@ def create_app() -> FastAPI:
     # ---------- stats
     @app.get("/api/stats", response_model=StatsResponse)
     def stats(
-        owner: str | None = Query(None),
+        owner_obj: Annotated[Owner, Depends(verified_owner)],
         repo: Repository = Depends(get_repo),
     ) -> StatsResponse:
-        owner_obj = _resolve_owner(repo, owner)
         assert owner_obj.id is not None
         people = repo.list_people(owner_id=owner_obj.id)
         rels = repo.list_relationships(owner_id=owner_obj.id)

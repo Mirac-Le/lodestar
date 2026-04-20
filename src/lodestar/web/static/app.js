@@ -29,9 +29,16 @@ const INDUSTRIES = [
 ];
 
 /* ---------------------------------------- API helpers */
+/* 多 owner 网页锁（B 模式）：
+ *   - unlock token 只活在 window.app.activeUnlockToken 内存里，{slug, token}
+ *   - 切到另一个 owner 立即丢；刷新页面也丢（不写 sessionStorage / localStorage）
+ *   - richard 与 tommy 严格独立：拿到 A 的 token 后再切 B 必须重新输 B 的密码 */
 function withOwner(path) {
-  // /api/owners is owner-agnostic; everything else gets the active slug.
-  if (path.startsWith("/api/owners")) return path;
+  // `/api/owners` 与解锁接口不带 ?owner=；其余请求挂当前 tab slug。
+  if (path.startsWith("/api/owners")) {
+    if (path.startsWith("/api/owners/unlock")) return path;
+    return path;
+  }
   const slug = window.app && window.app.owner;
   if (!slug) return path;
   const sep = path.includes("?") ? "&" : "?";
@@ -39,13 +46,33 @@ function withOwner(path) {
 }
 
 async function api(path, opts = {}) {
+  const headers = { "Content-Type": "application/json", ...(opts.headers || {}) };
+  const slug = window.app && window.app.owner;
+  const tok = window.app && window.app.activeUnlockToken;
+  if (slug && tok && tok.slug === slug) {
+    headers["X-Owner-Unlock"] = tok.token;
+  }
   const res = await fetch(withOwner(path), {
-    headers: { "Content-Type": "application/json" },
+    headers,
     ...opts,
     body: opts.body ? JSON.stringify(opts.body) : undefined,
   });
   if (!res.ok) {
     const text = await res.text();
+    if (res.status === 401) {
+      try {
+        const j = JSON.parse(text);
+        const d = j.detail;
+        const code = typeof d === "object" ? d.code : null;
+        const lockedSlug = typeof d === "object" ? d.slug : null;
+        if (code === "owner_locked" && lockedSlug) {
+          if (window.app?.activeUnlockToken?.slug === lockedSlug) {
+            window.app.activeUnlockToken = null;
+          }
+          window.app?.notify?.("该网络需重新输入密码解锁", "error");
+        }
+      } catch (_) { /* ignore */ }
+    }
     throw new Error(`${res.status}: ${text}`);
   }
   return res.json();
@@ -143,17 +170,30 @@ function applyAmbientState() {
 function buildFocusSummary(raw, nodeEle) {
   const neighbors = nodeEle ? nodeEle.neighborhood("node") : [];
   const neighborCount = nodeEle ? neighbors.length : 0;
-  const snippet = raw.bio
-    || (raw.skills && raw.skills.length ? `擅长 ${raw.skills.slice(0, 2).join(" / ")}` : "")
-    || (raw.tags && raw.tags.length ? `关键词：${raw.tags.slice(0, 3).join(" / ")}` : "")
-    || (raw.companies && raw.companies.length ? raw.companies.slice(0, 2).join(" · ") : "")
-    || "点击查看完整资料";
+  /* 速览卡：不要整段 bio（会和详情「简介」网格撞脸），只给一行「我在图里是谁」。 */
+  let headline = "";
+  if (raw.is_me) {
+    headline = "你的网络中心 · 从这里发起搜索";
+  } else if (raw.companies && raw.companies.length && raw.cities && raw.cities.length) {
+    headline = `${raw.companies[0]} · ${raw.cities[0]}`;
+  } else if (raw.companies && raw.companies.length) {
+    headline = raw.companies[0];
+  } else if (raw.cities && raw.cities.length) {
+    headline = raw.cities[0];
+  } else if (raw.skills && raw.skills.length) {
+    headline = raw.skills.slice(0, 2).join(" · ");
+  } else if (raw.tags && raw.tags.length) {
+    headline = raw.tags.slice(0, 2).join(" · ");
+  } else {
+    headline = "点下方打开完整档案";
+  }
 
-  let reason = "点击可展开完整资料";
-  if (raw.is_me) reason = "从这里开始，输入需求即可点亮路径";
-  else if (raw.needs && raw.needs.length) reason = `他现在可能在找：${raw.needs.slice(0, 2).join(" / ")}`;
-  else if (raw.skills && raw.skills.length) reason = `你可以和他聊：${raw.skills.slice(0, 2).join(" / ")}`;
-  else if (raw.tags && raw.tags.length) reason = `这个人和 ${raw.tags.slice(0, 2).join(" / ")} 有关`;
+  let reason = "";
+  if (raw.is_me) reason = "输入一句话目标，看推荐路径与引荐链";
+  else if (raw.needs && raw.needs.length) reason = `可能在找：${raw.needs.slice(0, 2).join(" · ")}`;
+  else if (raw.skills && raw.skills.length) reason = `可聊：${raw.skills.slice(0, 2).join(" · ")}`;
+  else if (raw.tags && raw.tags.length) reason = `关联：${raw.tags.slice(0, 2).join(" · ")}`;
+  else reason = "悬停速览 · 点按钮看结构化资料与关系";
 
   return {
     id: raw.id,
@@ -161,7 +201,7 @@ function buildFocusSummary(raw, nodeEle) {
     industry: raw.industry || "其他",
     color: raw.color,
     strength: raw.strength_to_me || 0,
-    snippet,
+    headline,
     reason,
     neighborCount,
   };
@@ -175,24 +215,27 @@ function applyFocusState(nodeId) {
     return null;
   }
   const meNode = cy.nodes("[?is_me]");
-  const meId = meNode.length > 0 ? meNode.first().id() : (window.app?.graph?.me_id != null ? String(window.app.graph.me_id) : null);
+  const meIdRaw = meNode.length > 0 ? meNode.first().id() : (window.app?.graph?.me_id != null ? window.app.graph.me_id : null);
+  const meIdStr = meIdRaw != null ? String(meIdRaw) : null;
+  const centerIdStr = String(center.id());
   const neighborNodes = center.neighborhood("node");
   const connectedEdges = center.connectedEdges();
-  const visibleNodeIds = new Set([center.id(), ...neighborNodes.map((n) => n.id())]);
-  const visibleEdgeIds = new Set(connectedEdges.map((e) => e.id()));
+  const visibleNodeIds = new Set([centerIdStr, ...neighborNodes.map((n) => String(n.id()))]);
+  const visibleEdgeIds = new Set(connectedEdges.map((e) => String(e.id())));
 
   cy.batch(() => {
     resetGraphState();
     cy.nodes().forEach((n) => {
       if (n.style("display") === "none") return;
-      if (n.id() === center.id()) n.addClass("focus-node label-visible");
-      else if (visibleNodeIds.has(n.id())) n.addClass("focus-neighbor label-visible");
+      const nid = String(n.id());
+      if (nid === centerIdStr) n.addClass("focus-node label-visible");
+      else if (visibleNodeIds.has(nid)) n.addClass("focus-neighbor label-visible");
       else n.addClass("ambient-muted label-hidden");
     });
     cy.edges().forEach((e) => {
       if (!e.data("is_me_edge")) return;
-      const s = e.data("source");
-      const t = e.data("target");
+      const s = String(e.data("source"));
+      const t = String(e.data("target"));
       const srcN = cy.getElementById(s);
       const tgtN = cy.getElementById(t);
       const epOk = srcN.style("display") !== "none" && tgtN.style("display") !== "none";
@@ -201,13 +244,24 @@ function applyFocusState(nodeId) {
         return;
       }
       let show = false;
-      if (meId && center.id() === meId) show = true;
-      else if (meId) show = (s === meId && t === center.id()) || (t === meId && s === center.id());
+      /* Hover/focus 中心是「我」时：仍画出所有 Me 边，但下面只对
+         strength >= weak_me_floor 的边打高亮，否则弱边会像刺猬一样全白，
+         和路径里「弱直连要引荐」的语义不一致。 */
+      if (meIdStr && centerIdStr === meIdStr) show = epOk;
+      else if (meIdStr) show = (s === meIdStr && t === centerIdStr) || (t === meIdStr && s === centerIdStr);
       e.style("display", show ? "element" : "none");
     });
+    const floor = window.app?.graph?.weak_me_floor ?? 4;
     cy.edges().forEach((e) => {
       if (e.style("display") === "none") return;
-      if (visibleEdgeIds.has(e.id())) e.addClass("focus-edge");
+      const eid = String(e.id());
+      if (e.data("is_me_edge") && meIdStr && centerIdStr === meIdStr) {
+        const str = e.data("strength") || 0;
+        if (str >= floor && visibleEdgeIds.has(eid)) e.addClass("focus-edge");
+        else e.addClass("ambient-muted");
+        return;
+      }
+      if (visibleEdgeIds.has(eid)) e.addClass("focus-edge");
       else e.addClass("ambient-muted");
     });
   });
@@ -505,7 +559,7 @@ function applyFilters(filters) {
 function appState() {
   return {
     /* ---- data ---- */
-    graph: { nodes: [], edges: [], me_id: null },
+    graph: { nodes: [], edges: [], me_id: null, weak_me_floor: 4 },
     owners: [],            // [{slug, display_name, contact_count, ...}]
     owner: null,           // active owner slug; null until /api/owners resolves
     detail: null,
@@ -598,6 +652,15 @@ function appState() {
     editingRelation: null,     // shallow copy currently being edited
     editingRelationBusy: false,
 
+    /* 多 owner 网页锁（B 模式：内存态、切走即丢、刷新即丢） */
+    showOwnerUnlockModal: false,
+    ownerUnlockSlug: null,
+    ownerUnlockPassword: "",
+    ownerUnlockError: null,
+    ownerUnlockBusy: false,
+    _ownerUnlockDone: null,
+    activeUnlockToken: null,    // {slug, token} | null —— 仅当前 owner 有效
+
     industriesList: INDUSTRIES,
 
     init() {
@@ -623,12 +686,115 @@ function appState() {
       } catch (e) {
         this.notify("加载 owner 列表失败：" + e.message, "error");
       }
+      try {
+        await this.ensureOwnerUnlocked();
+      } catch (e) {
+        // "superseded" = 用户在默认 owner 的密码弹窗上直接点了另一个 tab；
+        // "cancelled"  = 用户主动取消。两种情况都不再 toast，让用户自由选 tab。
+        if (e?.message !== "cancelled" && e?.message !== "superseded") {
+          this.notify("解锁失败：" + (e?.message || e), "error");
+        }
+        return;
+      }
       await this.loadGraph();
       await this.loadStats();
     },
 
+    async ensureOwnerUnlocked() {
+      const slug = this.owner;
+      if (!slug) return;
+      const o = this.owners.find((x) => x.slug === slug);
+      if (!o?.web_locked) return;
+      // 内存里已有该 owner 的 token 才放行；首次进入 / 刷新后都会重弹。
+      if (this.activeUnlockToken?.slug === slug) return;
+      await this.openOwnerUnlockPromise(slug);
+    },
+
+    openOwnerUnlockPromise(slug) {
+      return new Promise((resolve, reject) => {
+        this.ownerUnlockSlug = slug;
+        this.ownerUnlockPassword = "";
+        this.ownerUnlockError = null;
+        this.ownerUnlockBusy = false;
+        this._ownerUnlockDone = { resolve, reject };
+        this.showOwnerUnlockModal = true;
+      });
+    },
+
+    cancelOwnerUnlock(reason = "cancelled") {
+      this.showOwnerUnlockModal = false;
+      const done = this._ownerUnlockDone;
+      this._ownerUnlockDone = null;
+      if (done) done.reject(new Error(reason));
+    },
+
+    async submitOwnerUnlock() {
+      this.ownerUnlockBusy = true;
+      this.ownerUnlockError = null;
+      try {
+        const r = await fetch("/api/owners/unlock", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            slug: this.ownerUnlockSlug,
+            password: this.ownerUnlockPassword || "",
+          }),
+        });
+        const text = await r.text();
+        if (!r.ok) {
+          try {
+            const j = JSON.parse(text);
+            const d = j.detail;
+            this.ownerUnlockError = typeof d === "object"
+              ? (d.message || d.code || text)
+              : (d || text);
+          } catch (_) {
+            this.ownerUnlockError = text;
+          }
+          return;
+        }
+        const data = JSON.parse(text);
+        this.activeUnlockToken = {
+          slug: this.ownerUnlockSlug,
+          token: data.token,
+        };
+        this.showOwnerUnlockModal = false;
+        const done = this._ownerUnlockDone;
+        this._ownerUnlockDone = null;
+        if (done) done.resolve();
+      } catch (e) {
+        this.ownerUnlockError = e.message || String(e);
+      } finally {
+        this.ownerUnlockBusy = false;
+      }
+    },
+
     async switchOwner(slug) {
       if (!slug || slug === this.owner) return;
+      const o = this.owners.find((x) => x.slug === slug);
+      // 若另一个 owner 的解锁 modal 还开着（含首屏默认 owner 的弹窗），
+      // 先关掉再去走目标 owner 的流程，否则会出现 promise 串扰 / 双弹窗。
+      if (this.showOwnerUnlockModal && this.ownerUnlockSlug !== slug) {
+        this.cancelOwnerUnlock("superseded");
+      }
+      try {
+        if (o?.web_locked) {
+          // 弹密码；submitOwnerUnlock 成功后会把 activeUnlockToken 替换为新 owner
+          await this.openOwnerUnlockPromise(slug);
+        } else {
+          // 新 owner 无密码：上一个 owner 的授权也不带过去（B：严格独立）
+          this.activeUnlockToken = null;
+        }
+        await this._applyOwnerSwitch(slug);
+      } catch (e) {
+        // 用户取消解锁：保持留在原 owner，不动 activeUnlockToken。
+        if (e && e.message !== "cancelled" && e.message !== "superseded") {
+          this.notify("切换失败：" + (e.message || e), "error");
+        }
+      }
+    },
+
+    async _applyOwnerSwitch(slug) {
       this.owner = slug;
       // Clear anything that's owner-scoped so the old subgraph doesn't
       // bleed into the new tab visually before the fetch returns.
@@ -643,10 +809,8 @@ function appState() {
       this.relationsTotal = 0;
       this.cancelEditRelation();
       if (this.showRelationsDrawer) {
-        // refetch immediately so the new owner's edges show up
         this.loadRelationships();
       }
-      // Mirror the slug in the URL so refresh / share keeps the tab.
       const url = new URL(window.location.href);
       url.searchParams.set("owner", slug);
       window.history.replaceState({}, "", url);
@@ -1651,6 +1815,23 @@ function appState() {
       } catch (e) {
         this.notify(`删除失败：${e.message}`, "error");
       }
+    },
+
+    /* 简介里已有「公司 / 城市」时不再重复展示结构化 companies / cities 区块 */
+    bioKeysFromBio(text) {
+      const pairs = this.bioPairs(text);
+      if (!pairs) return null;
+      return new Set(pairs.map((p) => p.key));
+    },
+    detailShowExtraCompany(detail) {
+      const keys = this.bioKeysFromBio(detail?.bio);
+      if (!keys) return true;
+      return !keys.has("公司");
+    },
+    detailShowExtraCity(detail) {
+      const keys = this.bioKeysFromBio(detail?.bio);
+      if (!keys) return true;
+      return !keys.has("城市");
     },
 
     /* -------- bio formatting --------

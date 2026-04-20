@@ -71,3 +71,11 @@ def _migrate_in_place(conn: sqlite3.Connection) -> None:
         conn.execute(
             "ALTER TABLE relationship ADD COLUMN source TEXT NOT NULL DEFAULT 'manual'"
         )
+
+    existing_owner_cols = {
+        row["name"] for row in conn.execute("PRAGMA table_info(owner)")
+    }
+    if "web_password_hash" not in existing_owner_cols:
+        conn.execute(
+            "ALTER TABLE owner ADD COLUMN web_password_hash TEXT"
+        )
