@@ -1,0 +1,932 @@
+{
+  "date": "2026-04-21",
+  "queries": [
+    {
+      "id": "r-rolecliff-1",
+      "category": "role-cliff",
+      "owner": "richard",
+      "goal": "我想找量化私募老总",
+      "expected_top3": [
+        "李靖",
+        "建国哥",
+        "阿杜"
+      ],
+      "must_not_include": [
+        "俞汉清",
+        "Yuki陈"
+      ]
+    },
+    {
+      "id": "r-rolecliff-2",
+      "category": "role-cliff",
+      "owner": "richard",
+      "goal": "我要找投行做并购业务的人",
+      "expected_top3": [
+        "张坤"
+      ],
+      "must_not_include": [
+        "杜晓晗"
+      ]
+    },
+    {
+      "id": "r-rolecliff-3",
+      "category": "role-cliff",
+      "owner": "richard",
+      "goal": "我想接触药品监管口的处长 / 局长级别官员",
+      "expected_top3": [
+        "廉向金"
+      ],
+      "must_not_include": [
+        "宋伟",
+        "陈宝岩"
+      ]
+    },
+    {
+      "id": "r-ambig-1",
+      "category": "ambiguous",
+      "owner": "richard",
+      "goal": "我想了解政府监管动态，认识能打招呼的政府关系",
+      "expected_top3": [
+        "廉向金",
+        "宋伟",
+        "陈宝岩"
+      ],
+      "must_not_include": []
+    },
+    {
+      "id": "r-ambig-2",
+      "category": "ambiguous",
+      "owner": "richard",
+      "goal": "我想找深圳的金融圈朋友",
+      "expected_top3": [
+        "李靖",
+        "胡77",
+        "王毓"
+      ],
+      "must_not_include": []
+    },
+    {
+      "id": "r-longt-1",
+      "category": "longtail",
+      "owner": "richard",
+      "goal": "我想找懂跨境套利和加密货币的人",
+      "expected_top3": [
+        "胡77"
+      ],
+      "must_not_include": []
+    },
+    {
+      "id": "r-longt-2",
+      "category": "longtail",
+      "owner": "richard",
+      "goal": "我想做医疗器械销售对接",
+      "expected_top3": [
+        "杨永兴",
+        "孔焕然"
+      ],
+      "must_not_include": []
+    },
+    {
+      "id": "r-longt-3",
+      "category": "longtail",
+      "owner": "richard",
+      "goal": "我想接触可投资金的资金方",
+      "expected_top3": [
+        "大钊",
+        "阿杜",
+        "张坤"
+      ],
+      "must_not_include": []
+    },
+    {
+      "id": "r-onehop-1",
+      "category": "one-hop",
+      "owner": "richard",
+      "goal": "我想找能直接借钱的核心铁磁朋友",
+      "expected_top3": [
+        "大钊",
+        "建国哥",
+        "张坤"
+      ],
+      "must_not_include": []
+    },
+    {
+      "id": "r-onehop-2",
+      "category": "one-hop",
+      "owner": "richard",
+      "goal": "想认识山东青岛的私募基金人",
+      "expected_top3": [
+        "建国哥",
+        "德民",
+        "大钊"
+      ],
+      "must_not_include": []
+    },
+    {
+      "id": "t-rolecliff-1",
+      "category": "role-cliff",
+      "owner": "tommy",
+      "goal": "我想找头部量化私募的创始人或实控人",
+      "expected_top3": [
+        "但斌",
+        "张桂林",
+        "梁健"
+      ],
+      "must_not_include": [
+        "朱越凡",
+        "付雷"
+      ]
+    },
+    {
+      "id": "t-rolecliff-2",
+      "category": "role-cliff",
+      "owner": "tommy",
+      "goal": "想认识 AI 大模型的创始人或核心 CTO",
+      "expected_top3": [
+        "王小川",
+        "鞠强",
+        "喻友平"
+      ],
+      "must_not_include": [
+        "李笛"
+      ]
+    },
+    {
+      "id": "t-rolecliff-3",
+      "category": "role-cliff",
+      "owner": "tommy",
+      "goal": "我想直接对接招商证券系统的人",
+      "expected_top3": [
+        "易卫东",
+        "邱捷铭"
+      ],
+      "must_not_include": []
+    },
+    {
+      "id": "t-ambig-1",
+      "category": "ambiguous",
+      "owner": "tommy",
+      "goal": "我想做半导体相关的投资引荐",
+      "expected_top3": [
+        "刘辛蕊",
+        "于斌",
+        "黄博润"
+      ],
+      "must_not_include": []
+    },
+    {
+      "id": "t-ambig-2",
+      "category": "ambiguous",
+      "owner": "tommy",
+      "goal": "我想找有海外或外资背景的资金 / LP",
+      "expected_top3": [
+        "常宇亮",
+        "但斌",
+        "邢自强"
+      ],
+      "must_not_include": []
+    },
+    {
+      "id": "t-longt-1",
+      "category": "longtail",
+      "owner": "tommy",
+      "goal": "我想找企业法务 / 合规方向的律师",
+      "expected_top3": [
+        "王浚哲"
+      ],
+      "must_not_include": []
+    },
+    {
+      "id": "t-longt-2",
+      "category": "longtail",
+      "owner": "tommy",
+      "goal": "想认识地方国资股权基金的负责人",
+      "expected_top3": [
+        "陶琳",
+        "刘辛蕊"
+      ],
+      "must_not_include": []
+    },
+    {
+      "id": "t-longt-3",
+      "category": "longtail",
+      "owner": "tommy",
+      "goal": "我想找做家族办公室管理的人",
+      "expected_top3": [
+        "刘俊峤"
+      ],
+      "must_not_include": []
+    },
+    {
+      "id": "t-onehop-1",
+      "category": "one-hop",
+      "owner": "tommy",
+      "goal": "认识中金的 FOF 或财富管理基金经理",
+      "expected_top3": [
+        "朱越凡",
+        "付雷"
+      ],
+      "must_not_include": []
+    },
+    {
+      "id": "t-onehop-2",
+      "category": "one-hop",
+      "owner": "tommy",
+      "goal": "我想做券商通道 / 渠道业务的对接",
+      "expected_top3": [
+        "张千千",
+        "徐楷",
+        "戎捷"
+      ],
+      "must_not_include": []
+    }
+  ],
+  "results": {
+    "none": [
+      {
+        "query_id": "r-rolecliff-1",
+        "category": "role-cliff",
+        "owner": "richard",
+        "variant": "none",
+        "top_k_names": [
+          "俞汉清",
+          "胡77",
+          "李靖",
+          "阿杜",
+          "大钊"
+        ],
+        "recall_at_5": 0.6666666666666666,
+        "mrr": 0.3333333333333333,
+        "ndcg_at_10": 0.4367467095119258,
+        "cliff_hit": true,
+        "elapsed_ms": 247.48647678643465
+      },
+      {
+        "query_id": "r-rolecliff-2",
+        "category": "role-cliff",
+        "owner": "richard",
+        "variant": "none",
+        "top_k_names": [
+          "张坤",
+          "杜晓晗"
+        ],
+        "recall_at_5": 1.0,
+        "mrr": 1.0,
+        "ndcg_at_10": 1.0,
+        "cliff_hit": true,
+        "elapsed_ms": 165.60090612620115
+      },
+      {
+        "query_id": "r-rolecliff-3",
+        "category": "role-cliff",
+        "owner": "richard",
+        "variant": "none",
+        "top_k_names": [
+          "廉向金",
+          "李品一",
+          "张博"
+        ],
+        "recall_at_5": 1.0,
+        "mrr": 1.0,
+        "ndcg_at_10": 1.0,
+        "cliff_hit": false,
+        "elapsed_ms": 363.0810137838125
+      },
+      {
+        "query_id": "r-ambig-1",
+        "category": "ambiguous",
+        "owner": "richard",
+        "variant": "none",
+        "top_k_names": [],
+        "recall_at_5": 0.0,
+        "mrr": 0.0,
+        "ndcg_at_10": 0.0,
+        "cliff_hit": false,
+        "elapsed_ms": 168.49281918257475
+      },
+      {
+        "query_id": "r-ambig-2",
+        "category": "ambiguous",
+        "owner": "richard",
+        "variant": "none",
+        "top_k_names": [
+          "阿竹",
+          "阿裕",
+          "大钊",
+          "胡77",
+          "李靖"
+        ],
+        "recall_at_5": 0.6666666666666666,
+        "mrr": 0.25,
+        "ndcg_at_10": 0.38364913903790027,
+        "cliff_hit": false,
+        "elapsed_ms": 159.85321439802647
+      },
+      {
+        "query_id": "r-longt-1",
+        "category": "longtail",
+        "owner": "richard",
+        "variant": "none",
+        "top_k_names": [
+          "俞汉清",
+          "胡77"
+        ],
+        "recall_at_5": 1.0,
+        "mrr": 0.5,
+        "ndcg_at_10": 0.6309297535714575,
+        "cliff_hit": false,
+        "elapsed_ms": 178.32165211439133
+      },
+      {
+        "query_id": "r-longt-2",
+        "category": "longtail",
+        "owner": "richard",
+        "variant": "none",
+        "top_k_names": [
+          "孔焕然",
+          "杨永兴",
+          "黄振一",
+          "俞壮伟",
+          "杜晓晗"
+        ],
+        "recall_at_5": 1.0,
+        "mrr": 1.0,
+        "ndcg_at_10": 1.0,
+        "cliff_hit": false,
+        "elapsed_ms": 157.85765647888184
+      },
+      {
+        "query_id": "r-longt-3",
+        "category": "longtail",
+        "owner": "richard",
+        "variant": "none",
+        "top_k_names": [
+          "阿杜",
+          "大钊",
+          "杜海勇",
+          "夏熠",
+          "阿竹"
+        ],
+        "recall_at_5": 0.6666666666666666,
+        "mrr": 1.0,
+        "ndcg_at_10": 0.7653606369886217,
+        "cliff_hit": false,
+        "elapsed_ms": 406.3687091693282
+      },
+      {
+        "query_id": "r-onehop-1",
+        "category": "one-hop",
+        "owner": "richard",
+        "variant": "none",
+        "top_k_names": [],
+        "recall_at_5": 0.0,
+        "mrr": 0.0,
+        "ndcg_at_10": 0.0,
+        "cliff_hit": false,
+        "elapsed_ms": 144.72539722919464
+      },
+      {
+        "query_id": "r-onehop-2",
+        "category": "one-hop",
+        "owner": "richard",
+        "variant": "none",
+        "top_k_names": [
+          "大钊",
+          "阿竹",
+          "德民",
+          "阿裕",
+          "建国哥"
+        ],
+        "recall_at_5": 1.0,
+        "mrr": 1.0,
+        "ndcg_at_10": 0.8854598815714874,
+        "cliff_hit": false,
+        "elapsed_ms": 1137.4965393915772
+      },
+      {
+        "query_id": "t-rolecliff-1",
+        "category": "role-cliff",
+        "owner": "tommy",
+        "variant": "none",
+        "top_k_names": [
+          "高思南",
+          "谢乐斌",
+          "李华",
+          "但斌",
+          "李笛"
+        ],
+        "recall_at_5": 0.3333333333333333,
+        "mrr": 0.25,
+        "ndcg_at_10": 0.20210734650054757,
+        "cliff_hit": false,
+        "elapsed_ms": 268.75878497958183
+      },
+      {
+        "query_id": "t-rolecliff-2",
+        "category": "role-cliff",
+        "owner": "tommy",
+        "variant": "none",
+        "top_k_names": [
+          "李笛",
+          "李罗丹",
+          "王小川",
+          "李华",
+          "但斌"
+        ],
+        "recall_at_5": 0.3333333333333333,
+        "mrr": 0.3333333333333333,
+        "ndcg_at_10": 0.23463936301137822,
+        "cliff_hit": true,
+        "elapsed_ms": 154.07767239958048
+      },
+      {
+        "query_id": "t-rolecliff-3",
+        "category": "role-cliff",
+        "owner": "tommy",
+        "variant": "none",
+        "top_k_names": [
+          "邱捷铭",
+          "易卫东",
+          "李嘉祺",
+          "赵凯",
+          "徐楷"
+        ],
+        "recall_at_5": 1.0,
+        "mrr": 1.0,
+        "ndcg_at_10": 1.0,
+        "cliff_hit": false,
+        "elapsed_ms": 209.5274580642581
+      },
+      {
+        "query_id": "t-ambig-1",
+        "category": "ambiguous",
+        "owner": "tommy",
+        "variant": "none",
+        "top_k_names": [
+          "于斌",
+          "晁亚新",
+          "黄博润",
+          "刘辛蕊",
+          "向雯琦"
+        ],
+        "recall_at_5": 1.0,
+        "mrr": 1.0,
+        "ndcg_at_10": 0.9060254355346823,
+        "cliff_hit": false,
+        "elapsed_ms": 164.1774969175458
+      },
+      {
+        "query_id": "t-ambig-2",
+        "category": "ambiguous",
+        "owner": "tommy",
+        "variant": "none",
+        "top_k_names": [
+          "常宇亮",
+          "熊博",
+          "陈旭东",
+          "关中旗",
+          "顾励"
+        ],
+        "recall_at_5": 0.3333333333333333,
+        "mrr": 1.0,
+        "ndcg_at_10": 0.46927872602275644,
+        "cliff_hit": false,
+        "elapsed_ms": 244.7929810732603
+      },
+      {
+        "query_id": "t-longt-1",
+        "category": "longtail",
+        "owner": "tommy",
+        "variant": "none",
+        "top_k_names": [],
+        "recall_at_5": 0.0,
+        "mrr": 0.0,
+        "ndcg_at_10": 0.0,
+        "cliff_hit": false,
+        "elapsed_ms": 241.47760588675737
+      },
+      {
+        "query_id": "t-longt-2",
+        "category": "longtail",
+        "owner": "tommy",
+        "variant": "none",
+        "top_k_names": [
+          "陈京涛",
+          "刘辛蕊",
+          "陶琳"
+        ],
+        "recall_at_5": 1.0,
+        "mrr": 0.5,
+        "ndcg_at_10": 0.6934264036172708,
+        "cliff_hit": false,
+        "elapsed_ms": 216.23587980866432
+      },
+      {
+        "query_id": "t-longt-3",
+        "category": "longtail",
+        "owner": "tommy",
+        "variant": "none",
+        "top_k_names": [
+          "何彦林",
+          "陈数",
+          "李紫祎",
+          "陈京涛",
+          "刘俊峤"
+        ],
+        "recall_at_5": 1.0,
+        "mrr": 0.2,
+        "ndcg_at_10": 0.38685280723454163,
+        "cliff_hit": false,
+        "elapsed_ms": 339.4142361357808
+      },
+      {
+        "query_id": "t-onehop-1",
+        "category": "one-hop",
+        "owner": "tommy",
+        "variant": "none",
+        "top_k_names": [
+          "朱越凡",
+          "陈旭东",
+          "李洋",
+          "吉君",
+          "宋哲君"
+        ],
+        "recall_at_5": 0.5,
+        "mrr": 1.0,
+        "ndcg_at_10": 0.6131471927654584,
+        "cliff_hit": false,
+        "elapsed_ms": 159.36190355569124
+      },
+      {
+        "query_id": "t-onehop-2",
+        "category": "one-hop",
+        "owner": "tommy",
+        "variant": "none",
+        "top_k_names": [
+          "李想",
+          "林国国",
+          "索喆",
+          "赵思思",
+          "李嘉祺"
+        ],
+        "recall_at_5": 0.0,
+        "mrr": 0.0,
+        "ndcg_at_10": 0.0,
+        "cliff_hit": false,
+        "elapsed_ms": 183.53090435266495
+      }
+    ],
+    "llm": [
+      {
+        "query_id": "r-rolecliff-1",
+        "category": "role-cliff",
+        "owner": "richard",
+        "variant": "llm",
+        "top_k_names": [
+          "王一平",
+          "李靖",
+          "陈海明",
+          "建国哥",
+          "纪少敏"
+        ],
+        "recall_at_5": 0.6666666666666666,
+        "mrr": 0.5,
+        "ndcg_at_10": 0.49818925746641285,
+        "cliff_hit": false,
+        "elapsed_ms": 48222.22181968391
+      },
+      {
+        "query_id": "r-rolecliff-2",
+        "category": "role-cliff",
+        "owner": "richard",
+        "variant": "llm",
+        "top_k_names": [
+          "张坤",
+          "杜晓晗"
+        ],
+        "recall_at_5": 1.0,
+        "mrr": 1.0,
+        "ndcg_at_10": 1.0,
+        "cliff_hit": true,
+        "elapsed_ms": 5126.712303608656
+      },
+      {
+        "query_id": "r-rolecliff-3",
+        "category": "role-cliff",
+        "owner": "richard",
+        "variant": "llm",
+        "top_k_names": [
+          "廉向金",
+          "李品一",
+          "张博"
+        ],
+        "recall_at_5": 1.0,
+        "mrr": 1.0,
+        "ndcg_at_10": 1.0,
+        "cliff_hit": false,
+        "elapsed_ms": 6152.317547239363
+      },
+      {
+        "query_id": "r-ambig-1",
+        "category": "ambiguous",
+        "owner": "richard",
+        "variant": "llm",
+        "top_k_names": [],
+        "recall_at_5": 0.0,
+        "mrr": 0.0,
+        "ndcg_at_10": 0.0,
+        "cliff_hit": false,
+        "elapsed_ms": 324.67211224138737
+      },
+      {
+        "query_id": "r-ambig-2",
+        "category": "ambiguous",
+        "owner": "richard",
+        "variant": "llm",
+        "top_k_names": [
+          "大钊",
+          "阿竹",
+          "阿裕",
+          "胡77",
+          "李靖"
+        ],
+        "recall_at_5": 0.6666666666666666,
+        "mrr": 0.25,
+        "ndcg_at_10": 0.38364913903790027,
+        "cliff_hit": false,
+        "elapsed_ms": 23228.042068891227
+      },
+      {
+        "query_id": "r-longt-1",
+        "category": "longtail",
+        "owner": "richard",
+        "variant": "llm",
+        "top_k_names": [
+          "胡77",
+          "俞汉清"
+        ],
+        "recall_at_5": 1.0,
+        "mrr": 1.0,
+        "ndcg_at_10": 1.0,
+        "cliff_hit": false,
+        "elapsed_ms": 5957.456659525633
+      },
+      {
+        "query_id": "r-longt-2",
+        "category": "longtail",
+        "owner": "richard",
+        "variant": "llm",
+        "top_k_names": [
+          "杨永兴",
+          "孔焕然",
+          "黄振一",
+          "俞壮伟",
+          "杜晓晗"
+        ],
+        "recall_at_5": 1.0,
+        "mrr": 1.0,
+        "ndcg_at_10": 1.0,
+        "cliff_hit": false,
+        "elapsed_ms": 10562.616864219308
+      },
+      {
+        "query_id": "r-longt-3",
+        "category": "longtail",
+        "owner": "richard",
+        "variant": "llm",
+        "top_k_names": [
+          "阿杜",
+          "杜海勇",
+          "建国哥",
+          "纪少敏",
+          "王一平"
+        ],
+        "recall_at_5": 0.3333333333333333,
+        "mrr": 1.0,
+        "ndcg_at_10": 0.46927872602275644,
+        "cliff_hit": false,
+        "elapsed_ms": 43668.6207735911
+      },
+      {
+        "query_id": "r-onehop-1",
+        "category": "one-hop",
+        "owner": "richard",
+        "variant": "llm",
+        "top_k_names": [],
+        "recall_at_5": 0.0,
+        "mrr": 0.0,
+        "ndcg_at_10": 0.0,
+        "cliff_hit": false,
+        "elapsed_ms": 234.47409085929394
+      },
+      {
+        "query_id": "r-onehop-2",
+        "category": "one-hop",
+        "owner": "richard",
+        "variant": "llm",
+        "top_k_names": [
+          "建国哥",
+          "纪少敏",
+          "大钊",
+          "杜海勇",
+          "崔宁"
+        ],
+        "recall_at_5": 0.6666666666666666,
+        "mrr": 1.0,
+        "ndcg_at_10": 0.7039180890341347,
+        "cliff_hit": false,
+        "elapsed_ms": 33227.92213503271
+      },
+      {
+        "query_id": "t-rolecliff-1",
+        "category": "role-cliff",
+        "owner": "tommy",
+        "variant": "llm",
+        "top_k_names": [
+          "但斌",
+          "李华",
+          "遇言",
+          "秦轶轩",
+          "陈旭东"
+        ],
+        "recall_at_5": 0.3333333333333333,
+        "mrr": 1.0,
+        "ndcg_at_10": 0.46927872602275644,
+        "cliff_hit": false,
+        "elapsed_ms": 56193.63192375749
+      },
+      {
+        "query_id": "t-rolecliff-2",
+        "category": "role-cliff",
+        "owner": "tommy",
+        "variant": "llm",
+        "top_k_names": [
+          "王小川",
+          "鞠强",
+          "李笛",
+          "彭一杰",
+          "向雯琦"
+        ],
+        "recall_at_5": 0.6666666666666666,
+        "mrr": 1.0,
+        "ndcg_at_10": 0.7653606369886217,
+        "cliff_hit": true,
+        "elapsed_ms": 22007.14938621968
+      },
+      {
+        "query_id": "t-rolecliff-3",
+        "category": "role-cliff",
+        "owner": "tommy",
+        "variant": "llm",
+        "top_k_names": [
+          "邱捷铭",
+          "易卫东",
+          "李嘉祺",
+          "徐楷",
+          "赵凯"
+        ],
+        "recall_at_5": 1.0,
+        "mrr": 1.0,
+        "ndcg_at_10": 1.0,
+        "cliff_hit": false,
+        "elapsed_ms": 38697.88446556777
+      },
+      {
+        "query_id": "t-ambig-1",
+        "category": "ambiguous",
+        "owner": "tommy",
+        "variant": "llm",
+        "top_k_names": [
+          "刘辛蕊",
+          "于斌",
+          "黄博润",
+          "晁亚新",
+          "徐文伟"
+        ],
+        "recall_at_5": 1.0,
+        "mrr": 1.0,
+        "ndcg_at_10": 1.0,
+        "cliff_hit": false,
+        "elapsed_ms": 12224.793893285096
+      },
+      {
+        "query_id": "t-ambig-2",
+        "category": "ambiguous",
+        "owner": "tommy",
+        "variant": "llm",
+        "top_k_names": [
+          "常宇亮",
+          "陈数",
+          "熊博",
+          "王南浩",
+          "朱越凡"
+        ],
+        "recall_at_5": 0.3333333333333333,
+        "mrr": 1.0,
+        "ndcg_at_10": 0.46927872602275644,
+        "cliff_hit": false,
+        "elapsed_ms": 47446.222838014364
+      },
+      {
+        "query_id": "t-longt-1",
+        "category": "longtail",
+        "owner": "tommy",
+        "variant": "llm",
+        "top_k_names": [],
+        "recall_at_5": 0.0,
+        "mrr": 0.0,
+        "ndcg_at_10": 0.0,
+        "cliff_hit": false,
+        "elapsed_ms": 257.6172724366188
+      },
+      {
+        "query_id": "t-longt-2",
+        "category": "longtail",
+        "owner": "tommy",
+        "variant": "llm",
+        "top_k_names": [
+          "陶琳",
+          "刘辛蕊",
+          "陈京涛"
+        ],
+        "recall_at_5": 1.0,
+        "mrr": 1.0,
+        "ndcg_at_10": 1.0,
+        "cliff_hit": false,
+        "elapsed_ms": 5282.751675695181
+      },
+      {
+        "query_id": "t-longt-3",
+        "category": "longtail",
+        "owner": "tommy",
+        "variant": "llm",
+        "top_k_names": [
+          "何彦林",
+          "陈数",
+          "陈京涛",
+          "刘俊峤",
+          "马莉"
+        ],
+        "recall_at_5": 1.0,
+        "mrr": 0.25,
+        "ndcg_at_10": 0.43067655807339306,
+        "cliff_hit": false,
+        "elapsed_ms": 28935.12516003102
+      },
+      {
+        "query_id": "t-onehop-1",
+        "category": "one-hop",
+        "owner": "tommy",
+        "variant": "llm",
+        "top_k_names": [
+          "朱越凡",
+          "付雷",
+          "罗钢青",
+          "尹强",
+          "尤天洋"
+        ],
+        "recall_at_5": 1.0,
+        "mrr": 1.0,
+        "ndcg_at_10": 1.0,
+        "cliff_hit": false,
+        "elapsed_ms": 49063.79015836865
+      },
+      {
+        "query_id": "t-onehop-2",
+        "category": "one-hop",
+        "owner": "tommy",
+        "variant": "llm",
+        "top_k_names": [
+          "李想",
+          "赵思思",
+          "李嘉祺",
+          "索喆",
+          "林国国"
+        ],
+        "recall_at_5": 0.0,
+        "mrr": 0.0,
+        "ndcg_at_10": 0.0,
+        "cliff_hit": false,
+        "elapsed_ms": 11561.949684284627
+      }
+    ]
+  },
+  "summary": {
+    "none": {
+      "n": 20,
+      "recall_at_5": 0.625,
+      "mrr": 0.5683333333333334,
+      "ndcg_at_10": 0.5303811697684014,
+      "cliff_avoidance_rate": 0.85,
+      "avg_latency_ms": 265.5319653917104
+    },
+    "llm": {
+      "n": 20,
+      "recall_at_5": 0.6333333333333333,
+      "mrr": 0.7,
+      "ndcg_at_10": 0.6094814929334367,
+      "cliff_avoidance_rate": 0.9,
+      "avg_latency_ms": 22418.798641627654
+    }
+  }
+}

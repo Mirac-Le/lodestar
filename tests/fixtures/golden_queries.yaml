@@ -1,0 +1,235 @@
+# =============================================================================
+# Silver-standard golden queries for the Lodestar Stage-2 reranker.
+#
+# 来源：本文件由 AI 在 2026-04-21 基于 owner 网络的 bio + 公开规则自动构造，
+#      属于 *silver standard* —— 任何评测数字都应明示 silver disclaimer。
+#
+# 构造原则（避免循环论证）：
+#   * `expected_top3` / `must_not_include` 不来自 LLM judge / bge / hybrid
+#     的输出，而是基于 person 的事实型字段（bio / tags / companies / 职务）
+#     按 `rationale` 描述的人工规则筛出。
+#   * 规则裁判看的是 person 属性；reranker 看的是 query↔bio 语义相似度。
+#     两者输入互不依赖 → 评测信号独立。
+#
+# 升级路径：
+#   * 任何一条不准 → 直接编辑 yaml 改 `expected_top3` / `must_not_include`，
+#     再跑 `scripts/eval_search.py` 就会自动用新金标重算指标。
+#   * 想加更多 query → 沿用同样字段；脚本不依赖任何 hard-coded id。
+#
+# Schema:
+#   id                : 短英文 id，evaluation 报告里作 row 标识
+#   category          : role-cliff | ambiguous | longtail | one-hop
+#   owner             : richard | tommy
+#   goal              : 自然语言原始 goal（与用户在 web 端输入完全一致）
+#   rationale         : 一句话说明为什么这三个人是 expected
+#   expected_top3     : 期望出现在 top-5 的人（名字按 person.name 精确匹配）
+#   must_not_include  : 反例，命中 top-5 视为断崖失败（可空数组）
+# =============================================================================
+
+silver_disclaimer: |
+  This file is a silver-standard golden set built by AI from owner-network
+  bios + explicit rules. Hand-edit any row to upgrade individual queries to
+  gold. Eval reports must label results as "silver".
+
+queries:
+
+  # ============== richard 网络 (10 条) ==============
+
+  # ----- role-cliff (3 条) -----
+  - id: r-rolecliff-1
+    category: role-cliff
+    owner: richard
+    goal: "我想找量化私募老总"
+    rationale: "本人 = 实际管理量化私募基金的老板/基金经理，bio 含「私募基金」
+      且职务带「老板/基金经理/营销总监」；排除卖方资源型（「量化私募资源」
+      tag 但行业 ≠ 私募基金）和销售对接型（量化销售）。"
+    expected_top3: [李靖, 建国哥, 阿杜]
+    must_not_include: [俞汉清, Yuki陈]
+
+  - id: r-rolecliff-2
+    category: role-cliff
+    owner: richard
+    goal: "我要找投行做并购业务的人"
+    rationale: "本人 = 现职投行 + 主营并购。张坤 bio 明确「主营并购业务」。
+      杜晓晗虽中泰投行出身但已转公募渠道，不算本人。"
+    expected_top3: [张坤]
+    must_not_include: [杜晓晗]
+
+  - id: r-rolecliff-3
+    category: role-cliff
+    owner: richard
+    goal: "我想接触药品监管口的处长 / 局长级别官员"
+    rationale: "本人 = 药监条线且职级处长以上。廉向金 = 四川药监处长。
+      宋伟（审批局科长）/陈宝岩（城市更新局科长）级别不够 + 条线不对。"
+    expected_top3: [廉向金]
+    must_not_include: [宋伟, 陈宝岩]
+
+  # ----- ambiguous (2 条) -----
+  - id: r-ambig-1
+    category: ambiguous
+    owner: richard
+    goal: "我想了解政府监管动态，认识能打招呼的政府关系"
+    rationale: "意图较广 = 政府单位 + 在编官员（任意条线）。廉向金（药监处长）/
+      宋伟（审批局科长）/陈宝岩（城市更新局科长）都对得上，三人都算。"
+    expected_top3: [廉向金, 宋伟, 陈宝岩]
+    must_not_include: []
+
+  - id: r-ambig-2
+    category: ambiguous
+    owner: richard
+    goal: "我想找深圳的金融圈朋友"
+    rationale: "意图广 = 城市∋深圳 AND 行业∈{私募基金/券商/期货/政府金融监管}。
+      李靖、胡77（私募/深圳）；王毓（华林证券深圳量化）；陈宝岩（深圳政府）。
+      取金融背景前三。"
+    expected_top3: [李靖, 胡77, 王毓]
+    must_not_include: []
+
+  # ----- longtail (3 条) -----
+  - id: r-longt-1
+    category: longtail
+    owner: richard
+    goal: "我想找懂跨境套利和加密货币的人"
+    rationale: "胡77 tag 同时包含「跨境套利/加密货币专家/外资背景」，是唯一
+      明确对口的人。沈长征虽有「外资量化资源」但偏期货风控，不算本人。"
+    expected_top3: [胡77]
+    must_not_include: []
+
+  - id: r-longt-2
+    category: longtail
+    owner: richard
+    goal: "我想做医疗器械销售对接"
+    rationale: "本人 = 医疗器械行业且能落地销售/合作。杨永兴（宝莱特业务经理）
+      和孔焕然（AI/医疗器械 老板）都对口。"
+    expected_top3: [杨永兴, 孔焕然]
+    must_not_include: []
+
+  - id: r-longt-3
+    category: longtail
+    owner: richard
+    goal: "我想接触可投资金的资金方"
+    rationale: "tag 含「资金方」/「资金方资源」且 strength 较高的核心朋友。
+      大钊（5/5，资金方 tag）/ 阿杜（资金方 tag，FOF 投资经理）/ 张坤（5/5，
+      资金方+投行）。"
+    expected_top3: [大钊, 阿杜, 张坤]
+    must_not_include: []
+
+  # ----- one-hop (2 条，回归测试：直连强关系应稳定上浮) -----
+  - id: r-onehop-1
+    category: one-hop
+    owner: richard
+    goal: "我想找能直接借钱的核心铁磁朋友"
+    rationale: "纯 strength 信号：合作价值=5/5 的强直连。大钊/建国哥/张坤
+      都是 5/5。这是 baseline 不应该输的回归用例。"
+    expected_top3: [大钊, 建国哥, 张坤]
+    must_not_include: []
+
+  - id: r-onehop-2
+    category: one-hop
+    owner: richard
+    goal: "想认识山东青岛的私募基金人"
+    rationale: "城市=青岛 AND 行业=私募基金。建国哥（青岛/银方基金老板）和
+      德民（青岛/闪电小牛/IT）都对口；大钊城市含青岛但主在深圳。"
+    expected_top3: [建国哥, 德民, 大钊]
+    must_not_include: []
+
+  # ============== tommy 网络 (10 条) ==============
+
+  # ----- role-cliff (3 条) -----
+  - id: t-rolecliff-1
+    category: role-cliff
+    owner: tommy
+    goal: "我想找头部量化私募的创始人或实控人"
+    rationale: "本人 = 量化/主观私募基金的创始人 / 基金经理 / 市场负责人。
+      但斌（东方港湾创始人）/ 张桂林（易鑫安50E 主观私募基金经理）/ 梁健
+      （幻方市场负责人）都对口。FOF 投资人（朱越凡/付雷）是「桥梁」不是
+      「实控人」，不应进 top-3。"
+    expected_top3: [但斌, 张桂林, 梁健]
+    must_not_include: [朱越凡, 付雷]
+
+  - id: t-rolecliff-2
+    category: role-cliff
+    owner: tommy
+    goal: "想认识 AI 大模型的创始人或核心 CTO"
+    rationale: "本人 = AI 大模型公司的创始人 / 高管。王小川（百川智能创始人）/
+      鞠强（百川智能技术负责人）/ 喻友平（中关村科金总裁）。李笛是「前微软
+      高管」+ AI tag，但既非创始人也非现任 CTO，不应顶进 top-3。"
+    expected_top3: [王小川, 鞠强, 喻友平]
+    must_not_include: [李笛]
+
+  - id: t-rolecliff-3
+    category: role-cliff
+    owner: tommy
+    goal: "我想直接对接招商证券系统的人"
+    rationale: "公司线索 = 招商证券。易卫东（招商证券资管总经理）/ 邱捷铭
+      （招商证券自营负责人）。其他在中金 / 中泰 / 国信的人不算。"
+    expected_top3: [易卫东, 邱捷铭]
+    must_not_include: []
+
+  # ----- ambiguous (2 条) -----
+  - id: t-ambig-1
+    category: ambiguous
+    owner: tommy
+    goal: "我想做半导体相关的投资引荐"
+    rationale: "意图广 = 行业含半导体 AND 能引荐 / 当 LP / 是产业方。
+      刘辛蕊（半导体大基金高管）/ 于斌（紫光集团接班人）/ 黄博润（摩尔
+      线程大股东）都对口。"
+    expected_top3: [刘辛蕊, 于斌, 黄博润]
+    must_not_include: []
+
+  - id: t-ambig-2
+    category: ambiguous
+    owner: tommy
+    goal: "我想找有海外或外资背景的资金 / LP"
+    rationale: "意图 = 海外背景 + 资金属性。常宇亮（淡马锡中国区总经理，
+      新加坡主权基金）/ 但斌（私募创始人，海外配置经验）/ 邢自强（摩根
+      斯坦利首席经济学家）都有海外金融背景。"
+    expected_top3: [常宇亮, 但斌, 邢自强]
+    must_not_include: []
+
+  # ----- longtail (3 条) -----
+  - id: t-longt-1
+    category: longtail
+    owner: tommy
+    goal: "我想找企业法务 / 合规方向的律师"
+    rationale: "整个 tommy 网络里只有王浚哲是律所/律师身份。expected 只有 1 人。"
+    expected_top3: [王浚哲]
+    must_not_include: []
+
+  - id: t-longt-2
+    category: longtail
+    owner: tommy
+    goal: "想认识地方国资股权基金的负责人"
+    rationale: "tag 或职务含「国资股权基金」/「半导体大基金」。陶琳（深圳
+      国资投资平台负责人）/ 刘辛蕊（半导体大基金高管，国资股权基金 tag）。"
+    expected_top3: [陶琳, 刘辛蕊]
+    must_not_include: []
+
+  - id: t-longt-3
+    category: longtail
+    owner: tommy
+    goal: "我想找做家族办公室管理的人"
+    rationale: "整个 tommy 网络里只有刘俊峤明确「家办」tag + 百颐合伙人。
+      expected 只有 1 人。"
+    expected_top3: [刘俊峤]
+    must_not_include: []
+
+  # ----- one-hop (2 条) -----
+  - id: t-onehop-1
+    category: one-hop
+    owner: tommy
+    goal: "认识中金的 FOF 或财富管理基金经理"
+    rationale: "公司=中金 AND 角色=FOF/财富管理。朱越凡（中金 FOF 基金经理）
+      / 付雷（中金财富投资经理）。这是 t-rolecliff-1 的反例集合本身的合理
+      用例 —— 在 FOF 经理 query 下他们才是「本人」。"
+    expected_top3: [朱越凡, 付雷]
+    must_not_include: []
+
+  - id: t-onehop-2
+    category: one-hop
+    owner: tommy
+    goal: "我想做券商通道 / 渠道业务的对接"
+    rationale: "tag = 券商渠道 + 5/5 强信号。张千千（中泰证券券商渠道）/
+      徐楷（国信证券深圳分公司）/ 戎捷（中泰证券信息技术部负责人）都是
+      5/5 或 4/5 的渠道对接人。"
+    expected_top3: [张千千, 徐楷, 戎捷]
+    must_not_include: []
