@@ -26,6 +26,8 @@ def client(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> TestClient:
     init_schema(conn, embedding_dim=8)
     repo = Repository(conn)
     me = repo.ensure_me("我", bio="主人")
+    owner = repo.get_owner_by_slug("me")
+    assert owner is not None and owner.id is not None
     alice = repo.add_person(Person(
         name="Alice", bio="量化研究员",
         tags=["私募基金"], skills=["因子"], needs=["销售"],
@@ -35,14 +37,16 @@ def client(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> TestClient:
         tags=["销售渠道"], skills=["拓客"],
     ))
     assert me.id and alice.id and bob.id
+    repo.attach_person_to_owner(alice.id, owner.id)
+    repo.attach_person_to_owner(bob.id, owner.id)
     repo.add_relationship(Relationship(
         source_id=me.id, target_id=alice.id, strength=4,
         frequency=Frequency.MONTHLY, context="老同事",
-    ))
+    ), owner_id=owner.id)
     repo.add_relationship(Relationship(
         source_id=alice.id, target_id=bob.id, strength=3,
         frequency=Frequency.QUARTERLY,
-    ))
+    ), owner_id=owner.id)
     conn.close()
 
     app = create_app()
@@ -105,14 +109,17 @@ def test_wishlist_flag_is_decoupled_from_path_kind(
     init_schema(conn, embedding_dim=8)
     repo = Repository(conn)
     me = repo.ensure_me("我")
+    owner = repo.get_owner_by_slug("me")
+    assert owner is not None and owner.id is not None
     star = repo.add_person(Person(
         name="Star", bio="量化研究员",
         tags=["私募"], is_wishlist=True,
     ))
     assert me.id and star.id
+    repo.attach_person_to_owner(star.id, owner.id)
     repo.add_relationship(Relationship(
         source_id=me.id, target_id=star.id, strength=4,
-    ))
+    ), owner_id=owner.id)
     conn.close()
 
     client = TestClient(create_app())
@@ -175,5 +182,5 @@ def test_create_and_delete(client: TestClient) -> None:
 def test_index_serves(client: TestClient) -> None:
     r = client.get("/")
     assert r.status_code == 200
-    assert "LODESTAR" in r.text
+    assert "lodestar" in r.text.lower()
     assert "cytoscape" in r.text.lower()

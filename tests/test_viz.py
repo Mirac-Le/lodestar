@@ -55,7 +55,7 @@ def test_export_writes_html(tmp_path: Path) -> None:
     assert written.exists()
     text = written.read_text(encoding="utf-8")
     assert "Alice" in text
-    assert "ls-header" in text and "LODESTAR" in text
+    assert "ls-header" in text and "Lodestar" in text
     assert "ls-search" in text
 
 
@@ -82,5 +82,5 @@ def test_export_highlights_path(tmp_path: Path) -> None:
     out = tmp_path / "highlighted.html"
     GraphExporter(repo).export(out, highlighted=[fake], title="Goal")
     text = out.read_text(encoding="utf-8")
-    assert "Top Paths" in text
+    assert "推荐路径" in text
     assert "Bob" in text

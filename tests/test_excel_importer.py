@@ -73,8 +73,12 @@ def test_richard_finance_preset_roundtrip(repo: Repository, tmp_path: Path) -> N
     assert li_rel.strength == 4
 
 
-def test_needs_are_searchable(repo: Repository, tmp_path: Path) -> None:
-    """Someone searching for '客户' should surface people whose need is 客户."""
+def test_keyword_candidates_skip_needs_but_match_tags(
+    repo: Repository, tmp_path: Path,
+) -> None:
+    """`keyword_candidates` deliberately skips the `need` column (see
+    `Repository.keyword_candidates` docstring). Substring hits on tags /
+    bio still work — e.g. tag 「客户多」matches query 「客户」."""
     repo.ensure_me(name="我")
     xlsx_path = tmp_path / "contacts.xlsx"
     _make_xlsx(xlsx_path)
@@ -86,8 +90,8 @@ def test_needs_are_searchable(repo: Repository, tmp_path: Path) -> None:
     li = repo.find_person_by_name("李四")
     wang = repo.find_person_by_name("王五")
     assert li is not None and wang is not None
-    assert li.id in hits
-    assert wang.id in hits  # '客户多' also matches '客户'
+    assert li.id not in hits  # needs 「客户」/「收入」are not indexed here
+    assert wang.id in hits  # tag 「客户多」matches 「客户」
 
 
 def test_strength_zero_marks_uncontacted_and_skips_me_edge(

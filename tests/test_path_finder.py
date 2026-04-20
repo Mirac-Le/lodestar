@@ -43,9 +43,9 @@ def test_unreachable_beyond_max_hops(repo: Repository) -> None:
 
     finder = PathFinder(repo=repo, max_hops=3)
     results = finder.rank([Candidate(person_id=bob.id, score=0.5)])
-    assert len(results) == 1
-    assert results[0].path_strength == 0.0
-    assert results[0].path[0].name == "Bob"
+    # Unreachable from Me: omit — surfacing a zero-strength stub path
+    # is not actionable for the user.
+    assert results == []
 
 
 def test_path_kind_is_purely_topological(repo: Repository) -> None:
