@@ -165,6 +165,45 @@ def test_weak_me_floor_can_be_raised_to_demote_strength_two(repo: Repository) ->
     assert results[0].path_kind == "indirect"
 
 
+def test_weak_direct_falls_back_when_weighted_chain_exceeds_max_hops(
+    repo: Repository,
+) -> None:
+    """Regression for the 俞汉清/李坤 P0 bug.
+
+    Setup: Target only connects to Me through a strength=1 edge AND through a
+    long chain of *equally* weak intermediaries. The weak penalty inflates the
+    1-hop weighted distance higher than a 4-hop chain through stronger hubs,
+    so the weighted shortest path overshoots `max_hops=3`. Without the
+    topological fallback the candidate would silently disappear from results.
+
+    Expected: fall back to the unweighted 1-hop direct edge tagged `weak`.
+    """
+    me = repo.ensure_me(name="Me")
+    target = repo.add_person(Person(name="Target"))
+    hub_a = repo.add_person(Person(name="HubA"))
+    hub_b = repo.add_person(Person(name="HubB"))
+    hub_c = repo.add_person(Person(name="HubC"))
+    hub_d = repo.add_person(Person(name="HubD"))
+    assert (
+        me.id and target.id and hub_a.id and hub_b.id and hub_c.id and hub_d.id
+    )
+
+    _connect(repo, me.id, target.id, strength=1)
+    _connect(repo, me.id, hub_a.id, strength=5)
+    _connect(repo, hub_a.id, hub_b.id, strength=5)
+    _connect(repo, hub_b.id, hub_c.id, strength=5)
+    _connect(repo, hub_c.id, hub_d.id, strength=5)
+    _connect(repo, hub_d.id, target.id, strength=5)
+
+    finder = PathFinder(repo=repo, max_hops=3, weak_me_floor=2)
+    results = finder.rank([Candidate(person_id=target.id, score=0.6)])
+
+    assert len(results) == 1
+    r = results[0]
+    assert [s.name for s in r.path] == ["Me", "Target"]
+    assert r.path_kind == "weak"
+
+
 def test_direct_connection_wins(repo: Repository) -> None:
     me = repo.ensure_me(name="Me")
     alice = repo.add_person(Person(name="Alice"))

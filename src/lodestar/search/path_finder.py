@@ -21,7 +21,7 @@ class PathFinder:
         repo: Repository,
         max_hops: int = 3,
         owner_id: int | None = None,
-        weak_me_floor: int = 2,
+        weak_me_floor: int = 4,
     ) -> None:
         self._repo = repo
         self._max_hops = max_hops
@@ -156,8 +156,25 @@ class PathFinder:
         except nx.NetworkXNoPath:
             return None
 
+        # Weighted shortest path may exceed max_hops because `_build_graph`
+        # inflates weak Me edges by a large penalty: a 1-hop weak direct edge
+        # can lose to a 4-hop chain through stronger hubs. When that happens,
+        # *don't* return None — fall back to the unweighted (topological)
+        # shortest path so weakly-connected contacts at the edge of the graph
+        # still surface as a `weak` 1-hop result instead of vanishing entirely.
+        # Concretely: 俞汉清/李坤 only neighbour Me through a strength=1 edge
+        # plus other peers who themselves only reach Me via strength=1 — every
+        # weighted path is heavily penalised and may overshoot max_hops, but
+        # the user definitely *does* know them directly.
         if len(node_ids) - 1 > self._max_hops:
-            return None
+            try:
+                node_ids = nx.shortest_path(
+                    graph, source=source, target=target,
+                )
+            except nx.NetworkXNoPath:
+                return None
+            if len(node_ids) - 1 > self._max_hops:
+                return None
 
         steps: list[PathStep] = []
         total_strength = 0.0
