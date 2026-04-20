@@ -4,10 +4,10 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1">
   <title>Lodestar — Personal Network Navigator</title>
-  <link rel="stylesheet" href="/static/style.css?v=20260420-uncontacted">
+  <link rel="stylesheet" href="/static/style.css?v=20260420-binary">
   <script src="/static/cytoscape.min.js"></script>
   <script src="/static/echarts.min.js"></script>
-  <script defer src="/static/app.js?v=20260420-uncontacted"></script>
+  <script defer src="/static/app.js?v=20260420-binary"></script>
   <script defer src="/static/alpine.min.js"></script>
 </head>
 <body x-data="appState()" x-init="init()" :class="searching ? 'searching' : ''">
@@ -182,7 +182,7 @@
         <span class="ct"
               x-text="pathMode
                 ? `${indirect.length} 条候选 · 已按强度排序`
-                : `${direct.length} 直接 · ${weak.length} 弱认识 · ${indirect.length} 需引荐${wishlist.length ? ` · ${wishlist.length} 未联系` : ''}`"></span>
+                : `${contacted.length} 已联系 · ${indirect.length} 需引荐`"></span>
         <button class="close" @click="clearSearch()">
           <svg width="12" height="12"><use href="#i-close"/></svg>
         </button>
@@ -239,52 +239,28 @@
         </div>
       </template>
 
-      <!-- 直接好友 -->
-      <template x-if="direct.length > 0">
+      <!-- 已联系（按强度从强到弱排序；strength=1 自然排在末尾） -->
+      <template x-if="contacted.length > 0">
         <div class="path-section">
           <div class="path-section-head">
             <span class="kind-dot kind-direct"></span>
-            <span>你直接认识的人</span>
-            <span class="hint">可立即联系</span>
+            <span>你已联系的人</span>
+            <span class="hint">按可信度从强到弱排序，可立即联系</span>
           </div>
-          <template x-for="(p, idx) in direct" :key="'d'+p.target_id">
+          <template x-for="(p, idx) in contacted" :key="'c'+p.target_id">
             <div class="path-row"
-                 :class="{ 'is-active': activePathKey === 'd'+p.target_id }"
-                 @click="highlightPath(p, 'd'+p.target_id)">
+                 :class="{
+                   'is-active': activePathKey === 'c'+p.target_id,
+                   'path-row-weak': p.path_kind === 'weak'
+                 }"
+                 @click="highlightPath(p, 'c'+p.target_id)">
               <span class="rank" x-text="String(idx + 1).padStart(2, '0')"></span>
               <div class="body">
                 <div class="name-line">
                   <span class="name" x-text="p.target_name"></span>
-                  <span class="kind-chip kind-chip-direct">直接</span>
-                  <template x-if="p.is_wishlist">
-                    <span class="kind-chip kind-chip-wishlist" title="你标记为还没直接联系到（关系类型=未联系）">★ 未联系</span>
-                  </template>
-                </div>
-                <div class="path-context" x-text="pathContextLine(p)"></div>
-              </div>
-              <span class="score" x-text="p.combined_score.toFixed(2)"></span>
-            </div>
-          </template>
-        </div>
-      </template>
-
-      <!-- 弱认识 -->
-      <template x-if="weak.length > 0">
-        <div class="path-section">
-          <div class="path-section-head">
-            <span class="kind-dot kind-weak"></span>
-            <span>仅弱认识</span>
-            <span class="hint">点头之交，需先重新建立关系</span>
-          </div>
-          <template x-for="(p, idx) in weak" :key="'w'+p.target_id">
-            <div class="path-row path-row-weak"
-                 :class="{ 'is-active': activePathKey === 'w'+p.target_id }"
-                 @click="highlightPath(p, 'w'+p.target_id)">
-              <span class="rank" x-text="String(idx + 1).padStart(2, '0')"></span>
-              <div class="body">
-                <div class="name-line">
-                  <span class="name" x-text="p.target_name"></span>
-                  <span class="kind-chip kind-chip-weak">弱</span>
+                  <span class="kind-chip"
+                        :class="p.path_kind === 'weak' ? 'kind-chip-weak' : 'kind-chip-direct'"
+                        x-text="p.path_kind === 'weak' ? '强度 1' : '已联系'"></span>
                   <template x-if="p.is_wishlist">
                     <span class="kind-chip kind-chip-wishlist" title="你标记为还没直接联系到（关系类型=未联系）">★ 未联系</span>
                   </template>

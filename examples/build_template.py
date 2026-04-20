@@ -50,7 +50,9 @@ COLUMNS: list[tuple[str, str, str, str, int]] = [
      "帮你补后面的列**。建议 5-10 个短标签。",
      "港大金融;衍生品;交际广;外派经验;善于做局", "○", 44),
     ("可信度（言行一致性0-5分）",
-     "0-5 整数。1=点头之交，3=普通朋友，5=核心铁磁。**未联系的人填 0**。",
+     "0-5 整数。1=点头之交（旧版的『弱认识』）、3=普通朋友、5=核心铁磁。"
+     "**这一列承担『有多熟』的全部表达力**——以前的『弱认识』档已废，写 1 就是。"
+     "**未联系的人填 0**。",
      "5", "★", 14),
     ("合作价值（0-5）",
      "0-5 整数。和『可信度』正交：可信度 = 人靠不靠谱、合作价值 = 商业潜力大不大。"
@@ -72,12 +74,13 @@ COLUMNS: list[tuple[str, str, str, str, int]] = [
     ("备注", "任意自由文本；**不会进入搜索打分**，只在详情页展示。",
      "人脉通天", "-", 22),
     ("关系类型",
-     "三选一，决定 `我` 与此人的边怎么建（不影响搜索；任何人都可能成为某次"
-     "查询的 best match）：\n"
-     "  留空/直接 → 直接好友（按可信度建 Me 边，默认）\n"
-     "  弱认识   → 点头之交（只建强度=1 的 Me 边）\n"
-     "  未联系   → 不建 Me 边；只能通过别人的『认识』被引荐到",
-     "直接", "○", 12),
+     "二选一，纯事实标记：\n"
+     "  留空/已联系 → 我直接联系到了这个人（按可信度建 Me 边，默认）\n"
+     "  未联系     → 我还没联系到这个人；只能靠别人的『认识』列被引荐到\n"
+     "**这一列只描述事实，不描述意图**。"
+     "『我下次想接触谁』是 web 端搜索框里那句自然语言决定的，不要预先在表里"
+     "标谁是『目标』——任何人都可能成为某次查询的最佳匹配。",
+     "已联系", "○", 12),
 ]
 
 # --------------------------------------------------------------------- samples
@@ -90,17 +93,17 @@ SAMPLE_ROWS: list[list[str | int]] = [
      "港大金融;衍生品;交际广;外派经验;善于做局", 5, "",
      "家办客户;海外上市资源", "",
      "刘思敏(5,同事); 沈南鹏(2,中金时见过几次); 张磊(2,香港路演)",
-     "人脉通天", "直接"],
+     "人脉通天", "已联系"],
     [2, "李伟", "保险资管", "某大型保险资管", "FOF 基金经理", "上海",
      "清华五道口;稳健派;保险机构视角;做固收;长期共赢", 4, 5,
      "稳健中性策略;CTA 配置",
      "资金", "周景明(3,清华校友); 邱国鹭(3,高毅路演)",
-     "v3 合作过：发了一只中性策略的 FOF 子单元", "直接"],
+     "v3 合作过：发了一只中性策略的 FOF 子单元", "已联系"],
     [3, "沈南鹏", "风险投资", "红杉资本中国", "创始及执行合伙人", "上海/香港",
      "投资界第一;携程系;极少见生人", 0, "",
      "高质量项目源;长期 LP 关系",
      "资金;人脉", "",
-     "想接触 · 圈内可引荐", "未联系"],
+     "圈内可引荐", "未联系"],
 ]
 
 
@@ -136,16 +139,6 @@ def build() -> Path:
         "font_name": "JetBrains Mono", "font_size": 10, "valign": "top",
         "text_wrap": True, "border": 1, "border_color": "#e5e7eb",
         "align": "center", "bg_color": "#ecfdf5",
-    })
-    fmt_weak = wb.add_format({
-        "font_name": "PingFang SC", "font_size": 10, "valign": "top",
-        "text_wrap": True, "border": 1, "border_color": "#e5e7eb",
-        "bg_color": "#f3f4f6",
-    })
-    fmt_weak_mono = wb.add_format({
-        "font_name": "JetBrains Mono", "font_size": 10, "valign": "top",
-        "text_wrap": True, "border": 1, "border_color": "#e5e7eb",
-        "align": "center", "bg_color": "#f3f4f6",
     })
     fmt_target = wb.add_format({
         "font_name": "PingFang SC", "font_size": 10, "valign": "top",
@@ -186,14 +179,10 @@ def build() -> Path:
     NUMERIC_COLS = {0, 7, 8}  # 序号 / 可信度 / 合作价值
     for row_i, row in enumerate(SAMPLE_ROWS, start=1):
         kind = str(row[-1])
-        if kind == "直接":
-            txt, mono = fmt_direct, fmt_direct_mono
-        elif kind == "弱认识":
-            txt, mono = fmt_weak, fmt_weak_mono
-        elif kind == "未联系":
+        if kind == "未联系":
             txt, mono = fmt_target, fmt_target_mono
         else:
-            txt, mono = cell_fmt, cell_mono
+            txt, mono = fmt_direct, fmt_direct_mono
         for col_i, val in enumerate(row):
             f = mono if col_i in NUMERIC_COLS else txt
             ws.write(row_i, col_i, val, f)
@@ -208,10 +197,11 @@ def build() -> Path:
         1, kind_col, 2000, kind_col,
         {
             "validate": "list",
-            "source": ["直接", "弱认识", "未联系"],
+            "source": ["已联系", "未联系"],
             "input_title": "关系类型",
             "input_message":
-                "直接=默认；弱认识=只建强度1边；未联系=不建 Me 边，靠他人引荐",
+                "二选一，纯事实：已联系=默认（按可信度建 Me 边）；"
+                "未联系=不建 Me 边，靠他人引荐。",
         },
     )
     ws.data_validation(
@@ -320,13 +310,14 @@ def build() -> Path:
          "同一个 `公司` 字段里出现的所有人会自动成为同事（强度 4）。"
          "所以**同事不要写到『认识』里**，『认识』只用来描述跨公司的人脉"
          "（校友、前同事、合作过的对家、饭局认识等）。"),
-        ("★★ 『关系类型』怎么选",
-         "直接（默认）= 用可信度作为你和此人的边强度；"
-         "弱认识 = 只建强度 1 的 Me 边，避免点头之交拉高评分；"
-         "未联系 = 不建 Me 边，只依靠别人的『认识』列抵达——多跳引荐路径才能找到他。"
-         "把『想接触、还没直接联系』的人都标成『未联系』；"
-         "**这一档不影响搜索本身**——任何人（直接/弱/未联系）都可能是你下次自然语言"
-         "查询的最佳匹配，搜索按相关性排序而非按这个标签。"),
+        ("★★ 『关系类型』就两档：已联系 / 未联系",
+         "二选一，纯事实标记，不是意图："
+         "  已联系（默认）= 我直接联系到了这个人，按『可信度』1-5 决定边的强度；"
+         "  未联系 = 我还没联系到，不建 Me 边，只能靠别人的『认识』列被引荐到。"
+         "\n旧版的『弱认识』档已废——『有多熟』完全交给『可信度』列表达，写 1 就是。"
+         "\n⚠️ **这一列不要用来标『谁是我想接触的人』**。"
+         "『下次想找谁』是你在 web 端搜索框里说的那句话，由 LLM 解析意图后从全表"
+         "（含已联系 + 未联系）一起匹配并算路径——任何人都可能是某次查询的最佳匹配。"),
         ("★★ AI 自动补字段（v2 新机制）",
          "导入完后跑一次 `lodestar enrich --owner <你> --apply`，AI 会读"
          "『AI 标准化特征』『备注』『职务』，自动补出："
@@ -360,5 +351,5 @@ if __name__ == "__main__":
     print(f"Wrote {path}  ({path.stat().st_size // 1024} KB)")
     print(f"  · {len(COLUMNS)} columns "
           f"(★ 必填 {n_required} 列 / ○ 推荐 {n_recommended} 列)")
-    print(f"  · {len(SAMPLE_ROWS)} sample rows  (直接/弱认识/未联系 各一行)")
+    print(f"  · {len(SAMPLE_ROWS)} sample rows  (已联系×2 / 未联系×1)")
     print(f"  · 200 行空白模板 + 关系 sheet + 说明 sheet")

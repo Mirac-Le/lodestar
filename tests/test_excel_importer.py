@@ -102,7 +102,7 @@ def test_kind_uncontacted_sets_wishlist_and_skips_me_edge(
     df = pl.DataFrame({
         "姓名": ["张三", "想认识一号"],
         "所属行业": ["私募", "并购投行"],
-        "关系类型": ["直接", "未联系"],
+        "关系类型": ["已联系", "未联系"],
         "可信度（言行一致性0-5分）": [4, 0],
     })
     xlsx_path = tmp_path / "wish.xlsx"
@@ -122,32 +122,44 @@ def test_kind_uncontacted_sets_wishlist_and_skips_me_edge(
     assert zhang.is_wishlist is False
 
 
-def test_kind_legacy_target_no_longer_recognised(
+def test_kind_legacy_values_collapse_to_contacted(
     repo: Repository, tmp_path: Path,
 ) -> None:
-    """The pre-2026-04-20 vocabulary (`目标` / `target` / `想认识` / `陌生`)
-    is intentionally not recognised any more — anything other than the
-    documented `未联系` / `uncontacted` / `弱认识` / `weak` / `直接` falls
-    back to the default `direct` kind. This test pins the behavior so we
-    don't silently re-introduce alias drift."""
+    """The legacy vocabulary (`直接` / `弱认识` / `目标` / `target` /
+    `想认识` / `陌生`) is intentionally not recognised any more.
+    Only `已联系` / `contacted` / 留空 / `未联系` / `uncontacted` are
+    canonical. Anything else silently falls back to the default
+    `已联系` (= contacted) kind, which builds a Me-edge using the
+    row's `可信度`. This test pins the behavior so we don't silently
+    re-introduce alias drift, and crucially also verifies that the
+    deprecated `弱认识` no longer takes the strength=1 fast path —
+    closeness now comes solely from the 可信度 column."""
     from lodestar.importers import ExcelImporter, extended_network_preset
 
     repo.ensure_me(name="我")
     df = pl.DataFrame({
-        "姓名": ["旧词测试"],
-        "所属行业": ["VC"],
-        "关系类型": ["目标"],
-        "可信度（言行一致性0-5分）": [0],
+        "姓名": ["旧词目标", "旧词弱认识"],
+        "所属行业": ["VC", "PE"],
+        "关系类型": ["目标", "弱认识"],
+        "可信度（言行一致性0-5分）": [3, 4],
     })
     xlsx_path = tmp_path / "legacy.xlsx"
     df.write_excel(xlsx_path)
 
     ExcelImporter(repo, mapping=extended_network_preset()).import_file(xlsx_path)
 
-    legacy = repo.find_person_by_name("旧词测试")
-    assert legacy is not None
-    assert legacy.is_wishlist is False, \
+    target = repo.find_person_by_name("旧词目标")
+    weak = repo.find_person_by_name("旧词弱认识")
+    assert target is not None and weak is not None
+    assert target.is_wishlist is False, \
         "legacy '目标' must NOT silently behave as '未联系'"
+    assert weak.is_wishlist is False
     rels = repo.list_relationships()
-    assert any(r.target_id == legacy.id for r in rels), \
-        "legacy '目标' rows now build a default direct Me-edge"
+    target_rels = [r for r in rels if r.target_id == target.id]
+    weak_rels = [r for r in rels if r.target_id == weak.id]
+    assert len(target_rels) == 1, "legacy '目标' must fall back to a default Me-edge"
+    assert len(weak_rels) == 1, "legacy '弱认识' must fall back to a default Me-edge"
+    assert target_rels[0].strength == 3, \
+        "legacy '目标' edge must use 可信度, not the wishlist 0"
+    assert weak_rels[0].strength == 4, \
+        "legacy '弱认识' must NOT silently force strength=1 anymore — closeness is 可信度 only"

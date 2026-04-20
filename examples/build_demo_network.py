@@ -7,7 +7,7 @@ Run:
 The resulting file has three sheets:
 
 * `联系人` — fictional + famous-name contacts with the full extended schema,
-              including the `关系类型` column (`直接` / `弱认识` / `未联系`).
+              including the binary `关系类型` column (`已联系` / `未联系`).
 * `关系`   — hand-crafted peer edges (overrides any `认识` column
               content of the same pair).
 * `说明`   — human-readable instructions for the person filling it in.
@@ -28,10 +28,10 @@ OUT_PATH = Path(__file__).parent / "demo_network.xlsx"
 # Tuple = (序号, 姓名, 行业, 公司, 职务, 城市, AI特征, 可信度,
 #          潜在需求, 认识, 备注, 关系类型)
 #
-# 关系类型 values:
-#   ""       → 直接好友（默认，会建立 Me 强度 = 可信度 的边）
-#   "弱认识" → 仅强度 1 的 Me 边（点头之交）
-#   "未联系" → 不建立 Me 边；只能通过别人提到的 `认识` 抵达
+# 关系类型 values (binary, fact-only — intent is parsed at query time, not stored):
+#   ""        → 已联系（默认，建立 Me 强度 = 可信度 的边）
+#   "已联系"  → 同上，显式写法
+#   "未联系"  → 不建立 Me 边；只能通过别人提到的 `认识` 抵达
 #
 # IMPORTANT: every "未联系" person below is referenced by at least 2 direct
 # friends in their `认识` column, so multi-hop paths exist.
@@ -342,13 +342,16 @@ def build() -> Path:
         ("", "• 所有『行业/公司/城市/需求』支持多值，用 `;` `，` 或 `、` 分隔都行。"),
         ("", "• 没数据的格留空就行，不要填 `-` `无` `NA`。"),
 
-        ("2. 关键列：关系类型", ""),
-        ("", "三选一，决定『你』和此人之间是否建立直接好友关系（**不影响搜索本身**——"),
+        ("2. 关键列：关系类型（二态、纯事实）", ""),
+        ("", "二选一，只描述『我和此人有没有联系上』，**不描述意图**。"),
+        ("", "（『下次想找谁』是 web 端搜索框里那句自然语言决定的，不要在表里预定义"
+            "谁是『目标』。）"),
+        ("", "**不影响搜索本身**——"),
         ("", "搜索按相关性排序，任何人都可能是你下次自然语言查询的最佳匹配）："),
-        ("", "• 留空 / 直接 — 默认。把『可信度』作为 Me→此人的边强度。"),
-        ("", "• 弱认识 — 仅强度 1 的边。点头之交、刚加微信、被介绍认识但未深交。"),
-        ("", "• 未联系 — 你还没直接联系到此人，但希望被引荐到。系统会通过别人的"),
-        ("", "           『认识』列推算 2-3 跳的最优引荐路径。Demo 表里"),
+        ("", "• 留空 / 已联系 — 默认。把『可信度』作为 Me→此人的边强度（1-5，"),
+        ("", "                  1 = 点头之交，5 = 核心铁磁）。"),
+        ("", "• 未联系 — 我还没直接联系到此人。系统会通过别人的『认识』列推算"),
+        ("", "           2-3 跳的最优引荐路径。Demo 表里"),
         ("", "           沈南鹏/张磊/朱啸虎/雷军/张一鸣/段永平/邱国鹭 都是这种。"),
 
         ("3. 关键列：认识", ""),

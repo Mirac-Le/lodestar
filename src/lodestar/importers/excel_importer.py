@@ -138,19 +138,26 @@ class ColumnMapping:
     number of source columns; their cell contents are concatenated and
     split on `,` `，` `、` `;` `；` `/` `｜`.
 
-    `kind_column` controls Me-edge construction:
-        "直接"   / "direct" / empty   → Me→X edge with row's strength (default)
-        "弱认识" / "weak"             → Me→X edge forced to strength = 1
-        "未联系" / "uncontacted"      → NO Me-edge; this row marks "I don't
-                                        know this person directly yet, reach
-                                        only through other peers' `认识`
-                                        references". Surfaced in the UI via
-                                        `Person.is_wishlist=True`.
+    `kind_column` is binary — only two states matter, because the table
+    only describes facts ("did I reach this person?"), not intent ("who
+    do I want to talk to?"). Intent is parsed at query time by the LLM
+    from the user's natural-language prompt, not pre-baked into rows.
 
-    Note: the "未联系" value used to be called "目标" in earlier versions.
-    That naming was confusing — search/ranking already treats every contact
-    equally regardless of this flag, so the field is purely a fact-marker
-    ("no direct edge exists from me to X yet"), not a query target.
+        "已联系" / "contacted" / empty → Me→X edge with row's strength
+                                        (`可信度` column drives 1-5; if
+                                        you wanted "barely know them",
+                                        write 可信度=1 — there is no
+                                        separate "weak" bucket)
+        "未联系" / "uncontacted"      → NO Me-edge; this row marks "I have
+                                        not directly reached this person
+                                        yet, route only via other peers'
+                                        `认识` references". Surfaced in
+                                        the UI via `Person.is_wishlist=True`.
+
+    Strict vocabulary, no backward compat: the historical values
+    "直接 / 弱认识 / 目标 / 想认识 / target / 陌生" are no longer
+    recognised — they all collapse silently to the default `已联系`
+    because closeness is now expressed solely through `可信度`.
     """
 
     name: str
@@ -167,23 +174,26 @@ class ColumnMapping:
     kind_column: str | None = None
 
 
-_KIND_DIRECT = "direct"
-_KIND_WEAK = "weak"
+_KIND_CONTACTED = "contacted"
 _KIND_UNCONTACTED = "uncontacted"
 
 
 def _normalize_kind(raw: str) -> str:
-    """Map cell values to one of the three canonical kinds.
+    """Map cell values to one of the two canonical kinds.
 
-    Strict vocabulary — no backward compat for the old "目标 / 想认识 / 陌生"
-    aliases. Anything else falls through to `direct` (the historical default
-    for empty cells)."""
+    Binary by design: a person is either someone you've reached
+    (`contacted`) or someone you haven't (`uncontacted`). Closeness
+    among the contacted ones is expressed via `可信度` (strength 1-5),
+    not via a separate "weak" bucket — that bucket was always just
+    a shortcut for `strength=1` and double-encoded the same idea.
+
+    Strict vocabulary, no backward compat: legacy values like
+    "直接 / 弱认识 / 目标 / 想认识 / target / 陌生" are no longer
+    recognised and silently fall through to the default `已联系`."""
     text = raw.strip().lower()
     if text in {"未联系", "uncontacted"}:
         return _KIND_UNCONTACTED
-    if text in {"弱认识", "weak"}:
-        return _KIND_WEAK
-    return _KIND_DIRECT
+    return _KIND_CONTACTED
 
 
 def richard_finance_preset() -> ColumnMapping:
@@ -246,8 +256,7 @@ def tommy_contacts_preset() -> ColumnMapping:
     )
     value_col = "合作价值评分（0-5）"
     stage_col = (
-        "关系阶段（A：有良好合作基础；B：未合作但熟悉；"
-        "C：未合作且不熟悉；D:合作过但结果较差）"
+        "关系阶段（A：有良好合作基础；B：未合作但熟悉；C：未合作且不熟悉；D:合作过但结果较差）"
     )
     label_col = "核心标签（机构自营；机构fof；私募fof；三方机构；家办；个人；券商渠道）"
     biz_col = "可合作业务范围"
@@ -455,9 +464,7 @@ class ExcelImporter:
             return False
 
         # Decide whether (and how) to build the Me → Person edge.
-        kind_raw = (
-            _cell(row.get(self._mapping.kind_column)) if self._mapping.kind_column else ""
-        )
+        kind_raw = _cell(row.get(self._mapping.kind_column)) if self._mapping.kind_column else ""
         kind = _normalize_kind(kind_raw)
         is_wishlist_row = kind == _KIND_UNCONTACTED
 
@@ -504,10 +511,10 @@ class ExcelImporter:
             # (search/ranking treats every contact equally regardless of it).
             return True
 
-        if kind == _KIND_WEAK:
-            strength = 1
-        else:
-            strength = self._parse_strength(row)
+        # Contacted: build the Me-edge using strength from the 可信度 column.
+        # No special "weak" shortcut — if the user wants a faint edge they
+        # just write 可信度=1.
+        strength = self._parse_strength(row)
 
         context = (
             _cell(row.get(self._mapping.context_column)) if self._mapping.context_column else ""

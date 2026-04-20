@@ -511,8 +511,11 @@ function appState() {
     detail: null,
     paths: [],          // combined results, sorted by combined_score
     indirect: [],       // multi-hop introductions (path_kind == 'indirect')
-    direct: [],         // 1-hop strong (path_kind == 'direct')
-    weak: [],           // 1-hop weak (path_kind == 'weak')
+    contacted: [],      // 1-hop (direct + weak merged), sorted by strength desc;
+                        // backend still returns direct/weak separately for API
+                        // compat, we union here because the binary 关系类型
+                        // model has only "已联系 / 未联系", and "weak" is just
+                        // strength=1 within "已联系"
     wishlist: [],       // any kind, but is_wishlist == true (curation chip)
     activePathKey: null, // which result row is currently highlighted on the graph
     intent: null,
@@ -604,7 +607,7 @@ function appState() {
       // bleed into the new tab visually before the fetch returns.
       this.detail = null;
       this.paths = [];
-      this.indirect = []; this.direct = []; this.weak = []; this.wishlist = [];
+      this.indirect = []; this.contacted = []; this.wishlist = [];
       this.intent = null; this.activePathKey = null;
       this.searchActive = false; this.focusSummary = null;
       this.focusedNodeId = null; this.viewMode = "ambient";
@@ -726,13 +729,17 @@ function appState() {
         this.paths = resp.results;
         // Tolerate older servers that only know `targets`.
         this.indirect = resp.indirect || resp.targets || [];
-        this.direct = resp.direct || [];
-        this.weak = resp.weak || [];
+        // Merge backend's direct + weak into a single "已联系" bucket sorted
+        // by combined_score desc — strength-1 weak ties naturally fall to
+        // the bottom that way.
+        this.contacted = [
+          ...(resp.direct || []),
+          ...(resp.weak || []),
+        ].sort((a, b) => (b.combined_score || 0) - (a.combined_score || 0));
         this.wishlist = resp.wishlist || [];
         this.pathMode = false;
         this.pairLabels = null;
-        const nResults =
-          this.indirect.length + this.direct.length + this.weak.length;
+        const nResults = this.indirect.length + this.contacted.length;
 
         if (nResults === 0) {
           this.activePathKey = null;
@@ -779,7 +786,7 @@ function appState() {
     },
     clearSearch() {
       this.query = ""; this.intent = null;
-      this.paths = []; this.indirect = []; this.direct = []; this.weak = [];
+      this.paths = []; this.indirect = []; this.contacted = [];
       this.wishlist = [];
       this.activePathKey = null;
       this.searchActive = false;
@@ -793,11 +800,12 @@ function appState() {
        so clicking either the graph or the panel converges on the same key. */
     _rowKey(p) {
       const idx = this._rowIndex(p);
-      switch (p.path_kind) {
-        case "indirect": return `t-${idx}-${p.target_id}`;
-        case "weak":     return `w${p.target_id}`;
-        default:         return `d${p.target_id}`;
-      }
+      // Two visible buckets only: indirect (未联系，多跳引荐) vs contacted
+      // (已联系，1 跳，按 strength 排序). The legacy `path_kind=='weak'`
+      // values from the backend collapse into the contacted bucket and use
+      // the same `c{id}` key as strong direct contacts.
+      if (p.path_kind === "indirect") return `t-${idx}-${p.target_id}`;
+      return `c${p.target_id}`;
     },
     _rowIndex(p) {
       if (p.path_kind === "indirect") {
@@ -999,8 +1007,7 @@ function appState() {
         }
         this.paths = resp.paths;
         this.indirect = resp.paths;
-        this.direct = [];
-        this.weak = [];
+        this.contacted = [];
         this.wishlist = [];
         this.searchActive = true;
         this.pathMode = true;
@@ -1104,8 +1111,7 @@ function appState() {
       };
       this.paths = [synthetic];
       this.indirect = [synthetic];
-      this.direct = [];
-      this.weak = [];
+      this.contacted = [];
       this.wishlist = [];
       this.activePathKey = null;
       this.searchActive = true;
