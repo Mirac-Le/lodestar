@@ -42,6 +42,12 @@ class Settings(BaseSettings):
 
     max_hops: int = Field(default=3, ge=1, le=5)
     top_k: int = Field(default=10, ge=1, le=100)
+    # 路径搜索的"软阈值"：strength < weak_me_floor 的 Me 边在最短路径计算时
+    # 被加重惩罚，让算法主动绕开弱直连去找更熟的中间人引荐；如果实在没有
+    # 替代路径，仍会回退到这条弱边（标 path_kind=weak）。默认 2 等价于
+    # "只把 strength=1 的点头之交当弱直连"——与早先 _classify_path_kind
+    # 的硬编码行为一致，可经 LODESTAR_WEAK_ME_FLOOR=3 等环境变量提高。
+    weak_me_floor: int = Field(default=2, ge=1, le=5)
 
 
 _settings: Settings | None = None

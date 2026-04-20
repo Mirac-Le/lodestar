@@ -332,6 +332,7 @@ def create_app() -> FastAPI:
             )
         ranked = PathFinder(
             repo=repo, max_hops=settings.max_hops, owner_id=owner_obj.id,
+            weak_me_floor=settings.weak_me_floor,
         ).rank(candidates)
 
         # Bucket purely by graph topology. Each bucket is independently

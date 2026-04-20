@@ -244,7 +244,11 @@ def find(
         console.print("[yellow]No candidates found. Try adding more contacts or a different goal.[/yellow]")
         return
 
-    finder = PathFinder(repo=repo, max_hops=settings.max_hops)
+    finder = PathFinder(
+        repo=repo,
+        max_hops=settings.max_hops,
+        weak_me_floor=settings.weak_me_floor,
+    )
     results = finder.rank(candidates)
     render_paths(results, goal=goal, top_n=top)
 
@@ -882,9 +886,11 @@ def viz(
             intent, top_k=settings.top_k
         )
         if candidates:
-            highlighted = PathFinder(repo=repo, max_hops=settings.max_hops).rank(
-                candidates
-            )[:top]
+            highlighted = PathFinder(
+                repo=repo,
+                max_hops=settings.max_hops,
+                weak_me_floor=settings.weak_me_floor,
+            ).rank(candidates)[:top]
 
     exporter = GraphExporter(repo)
     out = exporter.export(output.resolve(), highlighted=highlighted, title=title)

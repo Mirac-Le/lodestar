@@ -104,6 +104,67 @@ def test_wishlist_no_longer_overrides_relevance(repo: Repository) -> None:
     assert direct_row.combined_score > distant_row.combined_score
 
 
+def test_weak_me_edge_routes_through_stronger_intermediary(repo: Repository) -> None:
+    """Weak Me edge below `weak_me_floor` should be deprioritised when a
+    stronger multi-hop chain exists; the algorithm picks the indirect path
+    even though the direct edge has fewer hops."""
+    me = repo.ensure_me(name="Me")
+    weak_friend = repo.add_person(Person(name="Weak"))
+    bridge = repo.add_person(Person(name="Bridge"))
+    assert me.id and weak_friend.id and bridge.id
+
+    _connect(repo, me.id, weak_friend.id, strength=1, context="见过一次")
+    _connect(repo, me.id, bridge.id, strength=4, context="老朋友")
+    _connect(repo, bridge.id, weak_friend.id, strength=4, context="同事")
+
+    finder = PathFinder(repo=repo, max_hops=3, weak_me_floor=2)
+    results = finder.rank([Candidate(person_id=weak_friend.id, score=0.8)])
+
+    assert len(results) == 1
+    r = results[0]
+    assert [s.name for s in r.path] == ["Me", "Bridge", "Weak"]
+    assert r.path_kind == "indirect"
+
+
+def test_weak_me_edge_falls_back_when_no_alternative(repo: Repository) -> None:
+    """If no multi-hop alternative exists, the weak Me edge survives as a
+    `weak` 1-hop result rather than being dropped."""
+    me = repo.ensure_me(name="Me")
+    weak_friend = repo.add_person(Person(name="Weak"))
+    assert me.id and weak_friend.id
+
+    _connect(repo, me.id, weak_friend.id, strength=1)
+
+    finder = PathFinder(repo=repo, max_hops=3, weak_me_floor=2)
+    results = finder.rank([Candidate(person_id=weak_friend.id, score=0.5)])
+
+    assert len(results) == 1
+    r = results[0]
+    assert [s.name for s in r.path] == ["Me", "Weak"]
+    assert r.path_kind == "weak"
+
+
+def test_weak_me_floor_can_be_raised_to_demote_strength_two(repo: Repository) -> None:
+    """A higher floor (e.g. 3) reclassifies strength-2 Me edges as weak too,
+    matching the user preference of treating ‘点头之交 + 弱认识’ as
+    needing introduction."""
+    me = repo.ensure_me(name="Me")
+    target = repo.add_person(Person(name="Target"))
+    bridge = repo.add_person(Person(name="Bridge"))
+    assert me.id and target.id and bridge.id
+
+    _connect(repo, me.id, target.id, strength=2)
+    _connect(repo, me.id, bridge.id, strength=4)
+    _connect(repo, bridge.id, target.id, strength=4)
+
+    finder = PathFinder(repo=repo, max_hops=3, weak_me_floor=3)
+    results = finder.rank([Candidate(person_id=target.id, score=0.7)])
+
+    assert len(results) == 1
+    assert [s.name for s in results[0].path] == ["Me", "Bridge", "Target"]
+    assert results[0].path_kind == "indirect"
+
+
 def test_direct_connection_wins(repo: Repository) -> None:
     me = repo.ensure_me(name="Me")
     alice = repo.add_person(Person(name="Alice"))

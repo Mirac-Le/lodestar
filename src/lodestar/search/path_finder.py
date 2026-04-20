@@ -21,10 +21,12 @@ class PathFinder:
         repo: Repository,
         max_hops: int = 3,
         owner_id: int | None = None,
+        weak_me_floor: int = 2,
     ) -> None:
         self._repo = repo
         self._max_hops = max_hops
         self._owner_id = owner_id
+        self._weak_me_floor = max(1, min(5, weak_me_floor))
         self._graph: nx.Graph | None = None
         self._person_cache: dict[int, Person] = {}
 
@@ -35,17 +37,18 @@ class PathFinder:
         topological** — it does not encode the user's `is_wishlist`
         curation, which is carried separately on the Person record:
 
-            direct   -- 1-hop strong Me-edge (strength ≥ 2)
-            weak     -- 1-hop weak Me-edge (strength = 1)
-            indirect -- no Me-edge; reachable only through intermediaries
+            direct   -- 1-hop strong Me-edge (strength ≥ weak_me_floor)
+            weak     -- 1-hop Me-edge that fell below `weak_me_floor`
+            indirect -- shortest path goes through intermediaries
 
-        Hop penalty is uniform across all kinds. Earlier versions softened
-        the penalty for the legacy `path_kind=='target'` bucket to keep
-        wishlist intros competitive, but that conflated "rare wishlist
-        contact" with "any peer-of-peer", so a single curated row could
-        monopolise the top result regardless of relevance. Wishlist is
-        now a UI concern only (Person.is_wishlist) — ranking treats every
-        reachable person fairly.
+        The classification is derived from the path actually chosen by
+        `_best_path`, **not** from "does a Me edge exist". This lets
+        `_build_graph` quietly add a weight penalty to weak Me edges so
+        that, whenever a more trustworthy multi-hop chain exists, the
+        algorithm prefers it. Result: a contact you only nodded at once
+        will be presented as "需要引荐" (indirect) when a stronger mutual
+        friend is available; only when no such bridge exists does the
+        weak direct edge survive as a `weak` 1-hop fallback.
         """
         me = self._repo.get_me(owner_id=self._owner_id)
         if me is None or me.id is None:
@@ -60,8 +63,6 @@ class PathFinder:
             if target is None:
                 continue
 
-            kind = self._classify_path_kind(graph, me.id, cand.person_id)
-
             path_info = self._best_path(graph, me.id, cand.person_id)
             if path_info is None:
                 # Unreachable: don't surface garbage. The user can't act on
@@ -69,6 +70,7 @@ class PathFinder:
                 continue
             steps, path_strength = path_info
             hops = max(len(steps) - 1, 1)
+            kind = self._classify_from_steps(steps)
 
             # Combined score: relevance is the primary signal. Strength only
             # nudges ranking within the same hop count (≤ ±10 %).
@@ -91,21 +93,47 @@ class PathFinder:
         results.sort(key=lambda r: r.combined_score, reverse=True)
         return results
 
-    def _classify_path_kind(self, graph: nx.Graph, me_id: int, pid: int) -> str:
-        """Tag based on the topological directness of Me's relation."""
-        if pid not in graph or me_id not in graph:
+    def _classify_from_steps(self, steps: list[PathStep]) -> str:
+        """Classify based on the path the algorithm actually picked.
+
+        A 1-hop path inherits its single edge's effective strength; if it
+        sits below `weak_me_floor` the edge survived only because no
+        stronger multi-hop alternative exists. Any path with > 1 hop is
+        inherently `indirect`.
+        """
+        if len(steps) <= 1:
             return "indirect"
-        if not graph.has_edge(me_id, pid):
-            return "indirect"
-        edge = graph.edges[me_id, pid]
-        return "weak" if int(edge.get("strength", 3)) <= 1 else "direct"
+        if len(steps) == 2:
+            s = int(steps[1].strength or 0)
+            return "weak" if s < self._weak_me_floor else "direct"
+        return "indirect"
 
     def _build_graph(self) -> nx.Graph:
         if self._graph is not None:
             return self._graph
+        me = self._repo.get_me(owner_id=self._owner_id)
+        me_id = me.id if me else None
+
+        # Penalty multiplier on weak Me edges. Picked large enough that
+        # ANY two-hop chain through reasonably-trusted contacts (each
+        # ≥ floor) wins on shortest_path: the worst two-hop weight is
+        # 2 * (1 / floor); we want `multiplier / strength` to dominate
+        # that, hence we scale by max_hops^2 to stay safe up to 5 hops.
+        weak_penalty = float(self._max_hops * self._max_hops * 4)
+
         g: nx.Graph = nx.Graph()
         for rel in self._repo.list_relationships(owner_id=self._owner_id):
-            weight = 1.0 / max(rel.strength, 1)
+            base = 1.0 / max(rel.strength, 1)
+            weight = base
+            if (
+                me_id is not None
+                and (rel.source_id == me_id or rel.target_id == me_id)
+                and rel.strength < self._weak_me_floor
+            ):
+                # Inflate weak Me edges so shortest_path will route through
+                # any plausible mutual friend. Falls back to this edge only
+                # when no alternative exists in the graph.
+                weight = base * weak_penalty
             g.add_edge(
                 rel.source_id,
                 rel.target_id,
