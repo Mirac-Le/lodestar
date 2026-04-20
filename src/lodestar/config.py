@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+from typing import Literal
 
 from platformdirs import user_data_dir
 from pydantic import Field
@@ -51,6 +52,18 @@ class Settings(BaseSettings):
     # 签名网页解锁令牌（X-Owner-Unlock）。留空时从 db_path 派生，仅适合本机；
     # 多机部署请设置 LODESTAR_OWNER_UNLOCK_SECRET。
     owner_unlock_secret: str = Field(default="")
+
+    # ----- Stage-2 reranker -----
+    # 在 HybridSearch 之后插入的重排器：
+    #   "none" → 不重排，保持现状（默认，零额外开销）。
+    #   "llm"  → LLMJudgeReranker：再调一次 Qwen 把候选分成
+    #            本人/桥梁/无关，治理 bi-encoder 的"角色断崖"。
+    #   "bge"  → BgeReranker（cross-encoder bge-reranker-v2-m3，
+    #            需要 `pip install -e .[rerank]` 装 torch）。
+    reranker: Literal["none", "llm", "bge"] = Field(default="none")
+    # Reranker 看的候选规模——比 top_k 大才有意义（用更宽召回换重排精度）。
+    # 默认 30，对 100 量级网络已经覆盖；超过 ~50 LLM 提示词会偏长。
+    reranker_recall_k: int = Field(default=30, ge=5, le=100)
 
 
 _settings: Settings | None = None

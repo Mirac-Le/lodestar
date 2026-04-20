@@ -26,7 +26,7 @@ from lodestar.models import (
     Person,
     Relationship,
 )
-from lodestar.search import HybridSearch, PathFinder
+from lodestar.search import HybridSearch, PathFinder, build_reranker_from_settings
 from lodestar.viz.pyvis_export import infer_industry
 from lodestar.web import enrich_jobs
 from lodestar.web.owner_unlock import (
@@ -409,13 +409,15 @@ def create_app() -> FastAPI:
             embedder = None
         candidates = HybridSearch(
             repo=repo, embedder=embedder, owner_id=owner_obj.id,
-        ).search(intent, top_k=settings.top_k)
+        ).search(intent, top_k=settings.top_k, recall_k=settings.reranker_recall_k)
         if not candidates:
             return SearchResponse(
                 goal=body.goal, intent_summary=intent.summary,
                 intent_keywords=intent.keywords, results=[],
                 highlighted_node_ids=[], highlighted_edge_ids=[],
             )
+        reranker = build_reranker_from_settings()
+        candidates = reranker.rerank(intent, candidates, repo)[: settings.top_k]
         ranked = PathFinder(
             repo=repo, max_hops=settings.max_hops, owner_id=owner_obj.id,
             weak_me_floor=settings.weak_me_floor,

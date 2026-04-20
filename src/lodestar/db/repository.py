@@ -478,18 +478,45 @@ class Repository:
             )
 
     def vector_search(
-        self, query_vec: Sequence[float], limit: int = 20
+        self,
+        query_vec: Sequence[float],
+        limit: int = 20,
+        owner_id: int | None = None,
     ) -> list[tuple[int, float]]:
-        """Return [(person_id, distance)] for nearest neighbors. Lower distance = closer."""
+        """Return [(person_id, distance)] for nearest neighbors. Lower distance = closer.
+
+        若提供 ``owner_id``，则在向量召回阶段就直接 JOIN ``person_owner``
+        过滤——避免「召回 N 个 → 在 Python 侧丢掉对方网络的人 → 实际只剩
+        几个」的 owner 串台问题。这里多取 ``limit * 4`` 让 sqlite-vec 在
+        全库 KNN 之后仍有足够候选可被 owner 过滤后保留。
+        """
+        if owner_id is None:
+            rows = self.conn.execute(
+                """
+                SELECT person_id, distance
+                FROM vec_person_bio
+                WHERE embedding MATCH ?
+                  AND k = ?
+                ORDER BY distance
+                """,
+                (_pack_vector(query_vec), limit),
+            ).fetchall()
+            return [(int(r["person_id"]), float(r["distance"])) for r in rows]
+
+        knn_limit = max(limit * 4, limit)
         rows = self.conn.execute(
             """
-            SELECT person_id, distance
-            FROM vec_person_bio
-            WHERE embedding MATCH ?
-              AND k = ?
-            ORDER BY distance
+            SELECT v.person_id AS person_id, v.distance AS distance
+            FROM vec_person_bio v
+            JOIN person_owner po
+              ON po.person_id = v.person_id
+             AND po.owner_id = ?
+            WHERE v.embedding MATCH ?
+              AND v.k = ?
+            ORDER BY v.distance
+            LIMIT ?
             """,
-            (_pack_vector(query_vec), limit),
+            (owner_id, _pack_vector(query_vec), knn_limit, limit),
         ).fetchall()
         return [(int(r["person_id"]), float(r["distance"])) for r in rows]
 

@@ -17,7 +17,7 @@ from lodestar.embedding import get_embedding_client
 from lodestar.importers import CSVImporter, ExcelImporter
 from lodestar.llm import GoalParser, get_llm_client
 from lodestar.models import Frequency, Person, Relationship
-from lodestar.search import HybridSearch, PathFinder
+from lodestar.search import HybridSearch, PathFinder, build_reranker_from_settings
 from lodestar.ui import render_paths, render_person
 
 app = typer.Typer(
@@ -35,6 +35,35 @@ def _open_repo() -> tuple[Repository, int]:
     conn = connect(settings.db_path)
     init_schema(conn, embedding_dim=settings.embedding_dim)
     return Repository(conn), settings.embedding_dim
+
+
+def _resolve_owner(repo: Repository, slug: str | None):
+    """统一的 owner 解析：单 owner 库自动选；多 owner 必须显式 --owner。
+
+    返回 ``Owner`` 对象（已校验 slug 存在）。失败时直接 ``typer.Exit``。
+    多 owner 时不让算法静默走"第一个 owner"，否则 search/path 会跑在
+    错误网络里——CLI 用户也是人，不应该比 web 端少这一层防护。
+    """
+    owners = repo.list_owners()
+    if not owners:
+        console.print("[red]No owners exist. Run `lodestar init` first.[/red]")
+        raise typer.Exit(code=1)
+    if slug is None:
+        if len(owners) == 1:
+            return owners[0]
+        console.print(
+            f"[red]Multiple owners exist; pass --owner one of: "
+            f"{', '.join(o.slug for o in owners)}.[/red]"
+        )
+        raise typer.Exit(code=1)
+    owner_obj = repo.get_owner_by_slug(slug)
+    if owner_obj is None:
+        console.print(
+            f"[red]Owner [cyan]{slug}[/cyan] not found. Existing: "
+            f"{', '.join(o.slug for o in owners)}.[/red]"
+        )
+        raise typer.Exit(code=1)
+    return owner_obj
 
 
 # --------------------------------------------------------------------- init
@@ -253,9 +282,17 @@ def find(
     no_llm: Annotated[
         bool, typer.Option("--no-llm", help="Skip LLM parsing; use raw goal as keywords.")
     ] = False,
+    owner: Annotated[
+        str | None,
+        typer.Option(
+            "--owner",
+            help="Owner slug (e.g. richard / tommy). Required when more than one owner exists.",
+        ),
+    ] = None,
 ) -> None:
     """Find the best people and paths for achieving a goal."""
     repo, _ = _open_repo()
+    owner_obj = _resolve_owner(repo, owner)
     settings = get_settings()
 
     if no_llm:
@@ -277,16 +314,22 @@ def find(
     except Exception:
         embedder = None
 
-    search = HybridSearch(repo=repo, embedder=embedder)
-    candidates = search.search(intent, top_k=settings.top_k)
+    search = HybridSearch(repo=repo, embedder=embedder, owner_id=owner_obj.id)
+    candidates = search.search(
+        intent, top_k=settings.top_k, recall_k=settings.reranker_recall_k
+    )
 
     if not candidates:
         console.print("[yellow]No candidates found. Try adding more contacts or a different goal.[/yellow]")
         return
 
+    reranker = build_reranker_from_settings()
+    candidates = reranker.rerank(intent, candidates, repo)[: settings.top_k]
+
     finder = PathFinder(
         repo=repo,
         max_hops=settings.max_hops,
+        owner_id=owner_obj.id,
         weak_me_floor=settings.weak_me_floor,
     )
     results = finder.rank(candidates)
@@ -906,29 +949,41 @@ def viz(
     open_browser: Annotated[
         bool, typer.Option("--open/--no-open", help="Auto-open the HTML in your browser.")
     ] = True,
+    owner: Annotated[
+        str | None,
+        typer.Option(
+            "--owner",
+            help="Owner slug whose network drives the goal-based highlighting.",
+        ),
+    ] = None,
 ) -> None:
     """Render the network as an interactive cyberpunk HTML graph."""
     from lodestar.viz import GraphExporter
 
     repo, _ = _open_repo()
     settings = get_settings()
+    owner_obj = _resolve_owner(repo, owner) if goal else None
 
     highlighted: list = []
     title = "Network"
     if goal:
+        assert owner_obj is not None
         title = f"Goal: {goal}"
         intent = _make_intent(goal, no_llm=no_llm)
         try:
             embedder = get_embedding_client()
         except Exception:
             embedder = None
-        candidates = HybridSearch(repo=repo, embedder=embedder).search(
-            intent, top_k=settings.top_k
-        )
+        candidates = HybridSearch(
+            repo=repo, embedder=embedder, owner_id=owner_obj.id,
+        ).search(intent, top_k=settings.top_k, recall_k=settings.reranker_recall_k)
         if candidates:
+            reranker = build_reranker_from_settings()
+            candidates = reranker.rerank(intent, candidates, repo)[: settings.top_k]
             highlighted = PathFinder(
                 repo=repo,
                 max_hops=settings.max_hops,
+                owner_id=owner_obj.id,
                 weak_me_floor=settings.weak_me_floor,
             ).rank(candidates)[:top]
 
