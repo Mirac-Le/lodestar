@@ -571,6 +571,33 @@ function appState() {
     batchJob: null,            // last EnrichJobState
     _batchPollTimer: null,
 
+    /* ---- NL relationship parse state ---- */
+    showRelationParse: false,
+    relationParseText: "",
+    relationParseBusy: false,
+    relationApplyBusy: false,
+    relationParseError: null,
+    relationProposals: [],     // [{a_id,a_name,b_id,b_name,strength,context,frequency,rationale,existing_edge,selected}]
+    relationContext: {},       // {person_id: [RelationshipDTO]}
+    relationUnknown: [],       // ["王某", ...]
+
+    /* ---- relationships drawer (browse / edit) ---- */
+    showRelationsDrawer: false,
+    relationships: [],         // RelationshipDTO[]
+    relationsTotal: 0,
+    relationsLoading: false,
+    relationsLoadingMore: false,
+    relationsFilter: {
+      q: "",
+      min_strength: 0,
+      include_me: true,
+      sources: [],            // empty = no filter; otherwise subset of provenance
+    },
+    _relationsPageSize: 50,
+    editingRelationId: null,
+    editingRelation: null,     // shallow copy currently being edited
+    editingRelationBusy: false,
+
     industriesList: INDUSTRIES,
 
     init() {
@@ -612,6 +639,13 @@ function appState() {
       this.searchActive = false; this.focusSummary = null;
       this.focusedNodeId = null; this.viewMode = "ambient";
       this.exitTwoPerson();
+      this.relationships = [];
+      this.relationsTotal = 0;
+      this.cancelEditRelation();
+      if (this.showRelationsDrawer) {
+        // refetch immediately so the new owner's edges show up
+        this.loadRelationships();
+      }
       // Mirror the slug in the URL so refresh / share keeps the tab.
       const url = new URL(window.location.href);
       url.searchParams.set("owner", slug);
@@ -644,6 +678,7 @@ function appState() {
           this.clearDetail();
           this.exitTwoPerson();
           this.showHelp = false; this.showAdd = false; this.showIntros = false;
+          this.showRelationParse = false;
         } else if (e.key === "?") {
           this.showHelp = !this.showHelp;
         } else if (e.key === "f" || e.key === "F") {
@@ -1377,6 +1412,245 @@ function appState() {
     ownerLabel(slug) {
       const o = (this.owners || []).find((x) => x.slug === slug);
       return o ? o.display_name : (slug || "当前用户");
+    },
+
+    /* -------- NL relationship parse (modal) -------- */
+
+    openRelationParse() {
+      this.showRelationParse = true;
+      this.relationParseError = null;
+    },
+    closeRelationParse() {
+      this.showRelationParse = false;
+    },
+    resetRelationParse() {
+      this.relationParseText = "";
+      this.relationProposals = [];
+      this.relationContext = {};
+      this.relationUnknown = [];
+      this.relationParseError = null;
+    },
+
+    selectedProposalCount() {
+      return this.relationProposals.filter((p) => p.selected && p.strength).length;
+    },
+
+    toggleSelectAllProposals(on) {
+      for (const p of this.relationProposals) {
+        // never silently auto-select rows missing strength — user must
+        // pick a value before applying. Toggle only the rows that are
+        // actually applyable.
+        if (on && p.strength) p.selected = true;
+        else if (!on) p.selected = false;
+      }
+    },
+
+    async parseRelations() {
+      const text = (this.relationParseText || "").trim();
+      if (!text || this.relationParseBusy) return;
+      this.relationParseBusy = true;
+      this.relationParseError = null;
+      this.relationProposals = [];
+      this.relationContext = {};
+      this.relationUnknown = [];
+      try {
+        const resp = await api("/api/relationships/parse", {
+          method: "POST",
+          body: { text },
+        });
+        if (resp.error) {
+          this.relationParseError = resp.error;
+        }
+        this.relationContext = resp.context_for || {};
+        this.relationUnknown = resp.unknown_mentions || [];
+        const proposals = (resp.proposals || []).map((p) => ({
+          ...p,
+          // Auto-select only when LLM gave a strength AND there isn't a
+          // higher-priority existing edge that the user might want to
+          // think twice about overwriting.
+          selected: Boolean(
+            p.strength
+            && (!p.existing_edge || p.existing_edge.source !== "manual"),
+          ),
+        }));
+        this.relationProposals = proposals;
+        if (
+          !this.relationParseError
+          && proposals.length === 0
+          && this.relationUnknown.length === 0
+        ) {
+          this.relationParseError = "AI 没解析出可入库的关系。试试更具体的描述。";
+        }
+      } catch (e) {
+        this.relationParseError = e.message || "解析失败";
+      } finally {
+        this.relationParseBusy = false;
+      }
+    },
+
+    async applySelectedRelations() {
+      if (this.relationApplyBusy) return;
+      const edges = this.relationProposals
+        .filter((p) => p.selected && p.strength)
+        .map((p) => ({
+          a_id: p.a_id,
+          b_id: p.b_id,
+          strength: +p.strength,
+          context: p.context || null,
+          frequency: p.frequency || "yearly",
+        }));
+      if (edges.length === 0) {
+        this.notify("请至少选一条且填好强度", "error");
+        return;
+      }
+      this.relationApplyBusy = true;
+      try {
+        const resp = await api("/api/relationships/apply", {
+          method: "POST",
+          body: { edges },
+        });
+        this.notify(`已写入 ${resp.applied} 条`
+          + (resp.skipped ? `（跳过 ${resp.skipped}）` : ""));
+        this.closeRelationParse();
+        this.resetRelationParse();
+        await this.loadGraph();
+        if (this.showRelationsDrawer) {
+          await this.loadRelationships();
+        }
+      } catch (e) {
+        this.notify(`入库失败：${e.message}`, "error");
+      } finally {
+        this.relationApplyBusy = false;
+      }
+    },
+
+    /* -------- relationships drawer -------- */
+
+    toggleRelationsDrawer() {
+      this.showRelationsDrawer = !this.showRelationsDrawer;
+      if (this.showRelationsDrawer && this.relationships.length === 0) {
+        this.loadRelationships();
+      }
+    },
+
+    toggleRelationSourceFilter(src) {
+      const arr = this.relationsFilter.sources;
+      const idx = arr.indexOf(src);
+      if (idx >= 0) arr.splice(idx, 1);
+      else arr.push(src);
+      this.loadRelationships();
+    },
+
+    relationSourceLabel(src) {
+      return ({
+        manual: "手工",
+        colleague_inferred: "同事推断",
+        ai_inferred: "AI 推断",
+      })[src] || src;
+    },
+
+    frequencyLabel(f) {
+      return ({
+        weekly: "每周",
+        monthly: "每月",
+        quarterly: "每季",
+        yearly: "每年",
+        rare: "极少",
+      })[f] || f;
+    },
+
+    _relationsQueryString(offset) {
+      const f = this.relationsFilter;
+      const params = new URLSearchParams();
+      if (f.q && f.q.trim()) params.set("q", f.q.trim());
+      if (f.min_strength) params.set("min_strength", String(f.min_strength));
+      if (!f.include_me) params.set("include_me", "false");
+      if (f.sources && f.sources.length) {
+        params.set("source", f.sources.join(","));
+      }
+      params.set("offset", String(offset));
+      params.set("limit", String(this._relationsPageSize));
+      return `/api/relationships?${params.toString()}`;
+    },
+
+    async loadRelationships() {
+      this.relationsLoading = true;
+      try {
+        const resp = await api(this._relationsQueryString(0));
+        this.relationships = resp.items || [];
+        this.relationsTotal = resp.total || 0;
+      } catch (e) {
+        this.notify(`加载关系失败：${e.message}`, "error");
+      } finally {
+        this.relationsLoading = false;
+      }
+    },
+
+    async loadMoreRelationships() {
+      if (this.relationsLoadingMore) return;
+      this.relationsLoadingMore = true;
+      try {
+        const resp = await api(this._relationsQueryString(this.relationships.length));
+        this.relationships = this.relationships.concat(resp.items || []);
+        this.relationsTotal = resp.total || this.relationsTotal;
+      } catch (e) {
+        this.notify(`加载更多失败：${e.message}`, "error");
+      } finally {
+        this.relationsLoadingMore = false;
+      }
+    },
+
+    startEditRelation(r) {
+      this.editingRelationId = r.id;
+      this.editingRelation = {
+        strength: r.strength,
+        context: r.context || "",
+        frequency: r.frequency,
+      };
+    },
+
+    cancelEditRelation() {
+      this.editingRelationId = null;
+      this.editingRelation = null;
+    },
+
+    async saveEditRelation() {
+      if (!this.editingRelationId || this.editingRelationBusy) return;
+      const id = this.editingRelationId;
+      this.editingRelationBusy = true;
+      try {
+        const updated = await api(`/api/relationships/${id}`, {
+          method: "PATCH",
+          body: {
+            strength: this.editingRelation.strength,
+            context: this.editingRelation.context || null,
+            frequency: this.editingRelation.frequency,
+          },
+        });
+        // optimistic in-place swap
+        const idx = this.relationships.findIndex((x) => x.id === id);
+        if (idx >= 0) this.relationships.splice(idx, 1, updated);
+        this.cancelEditRelation();
+        await this.loadGraph();
+        this.notify("已更新");
+      } catch (e) {
+        this.notify(`保存失败：${e.message}`, "error");
+      } finally {
+        this.editingRelationBusy = false;
+      }
+    },
+
+    async deleteRelation(r) {
+      if (!confirm(`删除 ${r.a_name} ↔ ${r.b_name} 这条边？`)) return;
+      try {
+        await api(`/api/relationships/${r.id}`, { method: "DELETE" });
+        this.relationships = this.relationships.filter((x) => x.id !== r.id);
+        this.relationsTotal = Math.max(0, this.relationsTotal - 1);
+        await this.loadGraph();
+        this.notify("已删除");
+      } catch (e) {
+        this.notify(`删除失败：${e.message}`, "error");
+      }
     },
 
     /* -------- bio formatting --------

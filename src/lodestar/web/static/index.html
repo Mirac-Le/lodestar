@@ -4,10 +4,10 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1">
   <title>Lodestar — Personal Network Navigator</title>
-  <link rel="stylesheet" href="/static/style.css?v=20260420-binary">
+  <link rel="stylesheet" href="/static/style.css?v=20260420-nlrel">
   <script src="/static/cytoscape.min.js"></script>
   <script src="/static/echarts.min.js"></script>
-  <script defer src="/static/app.js?v=20260420-binary"></script>
+  <script defer src="/static/app.js?v=20260420-nlrel"></script>
   <script defer src="/static/alpine.min.js"></script>
 </head>
 <body x-data="appState()" x-init="init()" :class="searching ? 'searching' : ''">
@@ -51,6 +51,17 @@
       </symbol>
       <symbol id="i-arrow" viewBox="0 0 16 16">
         <path d="M3 8 H13 M10 5 L13 8 L10 11" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
+      </symbol>
+      <symbol id="i-link" viewBox="0 0 16 16">
+        <path d="M6.5 9.5 L9.5 6.5" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>
+        <path d="M9 4 L11 2 A2 2 0 0 1 14 5 L12 7" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
+        <path d="M7 9 L5 11 A2 2 0 0 1 2 8 L4 6" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
+      </symbol>
+      <symbol id="i-edit" viewBox="0 0 16 16">
+        <path d="M3 13 L3 11 L11 3 L13 5 L5 13 Z" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round"/>
+      </symbol>
+      <symbol id="i-trash" viewBox="0 0 16 16">
+        <path d="M3 4 H13 M5 4 L5 2 H11 L11 4 M4 4 L5 14 H11 L12 4" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
       </symbol>
     </defs>
   </svg>
@@ -113,6 +124,16 @@
     <button class="btn primary" @click="openAdd()" title="添加联系人 (N)">
       <svg class="ico" width="14" height="14"><use href="#i-plus"/></svg>
       <span>新联系人</span>
+    </button>
+    <button class="btn" @click="openRelationParse()"
+            title="用一句话描述谁认识谁，AI 解析后入库">
+      <svg class="ico" width="14" height="14"><use href="#i-link"/></svg>
+      <span>新关系</span>
+    </button>
+    <button class="btn" @click="toggleRelationsDrawer()"
+            :class="{ 'is-active': showRelationsDrawer }"
+            title="浏览/编辑当前 owner 的全部关系">
+      <span style="font-weight: 600; letter-spacing: .02em;">关系</span>
     </button>
     <button class="btn" @click="openBatchEnrich()"
             title="对当前 owner 下所有联系人做 AI 解析（缺字段才跑）">
@@ -677,6 +698,325 @@
           <button class="btn primary" @click="showHelp = false">明白</button>
         </div>
       </div>
+    </div>
+  </template>
+
+  <!-- ========== NL relationship parse modal ========== -->
+  <template x-if="showRelationParse">
+    <div class="modal-bg" @click.self="closeRelationParse()">
+      <div class="modal modal-wide">
+        <h2>用一句话加关系</h2>
+        <p>
+          描述谁认识谁，AI 会脱敏后解析成结构化提案。
+          <strong>不会自动建联系人</strong>——文本里出现的陌生姓名只会出现在提示区，
+          需先用「新联系人」录入再回来解析。
+        </p>
+
+        <div class="field">
+          <label>自然语言描述</label>
+          <textarea x-model="relationParseText"
+                    rows="5"
+                    placeholder="例如：老张和小李是同事，每月都聚一次。Mike 把小李介绍给我。"></textarea>
+        </div>
+
+        <div class="modal-actions" style="margin-top: 8px;">
+          <button class="btn primary"
+                  :disabled="relationParseBusy || !relationParseText.trim()"
+                  @click="parseRelations()">
+            <span x-text="relationParseBusy ? 'AI 解析中…' : '解析'"></span>
+          </button>
+          <template x-if="relationProposals.length || relationUnknown.length">
+            <button class="btn"
+                    @click="resetRelationParse()"
+                    :disabled="relationParseBusy">重置</button>
+          </template>
+        </div>
+
+        <template x-if="relationParseError">
+          <div style="margin-top: 10px; color: var(--danger); font-size: 12px;"
+               x-text="relationParseError"></div>
+        </template>
+
+        <template x-if="relationUnknown.length > 0">
+          <div class="rel-unknown">
+            <span class="rel-unknown-label">未识别的姓名：</span>
+            <template x-for="n in relationUnknown" :key="n">
+              <span class="rel-unknown-chip" x-text="n"></span>
+            </template>
+            <span class="rel-unknown-hint">先用「新联系人」录入，再回来解析。</span>
+          </div>
+        </template>
+
+        <template x-if="relationProposals.length > 0">
+          <div class="rel-preview">
+            <div class="rel-preview-head">
+              <span x-text="`AI 提议的边 · ${relationProposals.length} 条`"></span>
+              <label style="display:flex; gap: 6px; align-items: center;
+                            font-size: 12px; color: var(--text-muted);">
+                <input type="checkbox"
+                       :checked="relationProposals.every(p => p.selected)"
+                       @change="toggleSelectAllProposals($event.target.checked)"
+                       style="width:auto;">
+                全选
+              </label>
+            </div>
+
+            <template x-for="(p, idx) in relationProposals" :key="`pp-${idx}-${p.a_id}-${p.b_id}`">
+              <div class="rel-row" :class="{ 'is-skipped': !p.selected }">
+                <label class="rel-row-toggle">
+                  <input type="checkbox" x-model="p.selected" style="width:auto;">
+                </label>
+                <div class="rel-row-body">
+                  <div class="rel-row-head">
+                    <span class="rel-name" x-text="p.a_name"></span>
+                    <span class="rel-arrow">↔</span>
+                    <span class="rel-name" x-text="p.b_name"></span>
+                    <template x-if="p.existing_edge">
+                      <span class="rel-existing-tag"
+                            :title="`覆盖现有 ${p.existing_edge.source} 边 strength=${p.existing_edge.strength}`">
+                        覆盖 <span x-text="p.existing_edge.source"></span> ·
+                        现 <span x-text="p.existing_edge.strength"></span>
+                      </span>
+                    </template>
+                    <template x-if="!p.existing_edge">
+                      <span class="rel-new-tag">新</span>
+                    </template>
+                  </div>
+                  <div class="rel-row-controls">
+                    <label>
+                      <span>强度</span>
+                      <select x-model.number="p.strength">
+                        <option :value="null">—</option>
+                        <option :value="1">1 · 远</option>
+                        <option :value="2">2</option>
+                        <option :value="3">3 · 中</option>
+                        <option :value="4">4</option>
+                        <option :value="5">5 · 近</option>
+                      </select>
+                    </label>
+                    <label>
+                      <span>频率</span>
+                      <select x-model="p.frequency">
+                        <option :value="null">—</option>
+                        <option value="weekly">每周</option>
+                        <option value="monthly">每月</option>
+                        <option value="quarterly">每季</option>
+                        <option value="yearly">每年</option>
+                        <option value="rare">极少</option>
+                      </select>
+                    </label>
+                    <label class="rel-context-input">
+                      <span>备注</span>
+                      <input type="text" x-model="p.context" placeholder="如何认识 / 关系上下文">
+                    </label>
+                  </div>
+                  <template x-if="p.rationale">
+                    <div class="rel-row-rationale" x-text="`原文：${p.rationale}`"></div>
+                  </template>
+                  <template x-if="(relationContext[p.a_id] || []).length || (relationContext[p.b_id] || []).length">
+                    <div class="rel-row-context">
+                      <template x-if="(relationContext[p.a_id] || []).length">
+                        <div>
+                          <span class="rel-ctx-label" x-text="`${p.a_name} 现有：`"></span>
+                          <template x-for="r in (relationContext[p.a_id] || []).slice(0, 4)" :key="r.id">
+                            <span class="rel-ctx-pill"
+                                  x-text="`${r.a_id === p.a_id ? r.b_name : r.a_name} (${r.strength})`"></span>
+                          </template>
+                          <template x-if="(relationContext[p.a_id] || []).length > 4">
+                            <span class="rel-ctx-more"
+                                  x-text="`+${(relationContext[p.a_id] || []).length - 4}`"></span>
+                          </template>
+                        </div>
+                      </template>
+                      <template x-if="(relationContext[p.b_id] || []).length">
+                        <div>
+                          <span class="rel-ctx-label" x-text="`${p.b_name} 现有：`"></span>
+                          <template x-for="r in (relationContext[p.b_id] || []).slice(0, 4)" :key="r.id">
+                            <span class="rel-ctx-pill"
+                                  x-text="`${r.a_id === p.b_id ? r.b_name : r.a_name} (${r.strength})`"></span>
+                          </template>
+                          <template x-if="(relationContext[p.b_id] || []).length > 4">
+                            <span class="rel-ctx-more"
+                                  x-text="`+${(relationContext[p.b_id] || []).length - 4}`"></span>
+                          </template>
+                        </div>
+                      </template>
+                    </div>
+                  </template>
+                </div>
+              </div>
+            </template>
+          </div>
+        </template>
+
+        <div class="modal-actions">
+          <button class="btn" @click="closeRelationParse()">关闭</button>
+          <template x-if="relationProposals.length > 0">
+            <button class="btn primary"
+                    :disabled="relationApplyBusy || selectedProposalCount() === 0"
+                    @click="applySelectedRelations()">
+              <span x-text="relationApplyBusy
+                ? '入库中…'
+                : `保存所选（${selectedProposalCount()}）`"></span>
+            </button>
+          </template>
+        </div>
+      </div>
+    </div>
+  </template>
+
+  <!-- ========== Relationships drawer (browse / edit) ========== -->
+  <template x-if="showRelationsDrawer">
+    <div class="panel panel-relations" x-transition>
+      <h3>关系
+        <span class="ct" x-text="relationsTotal === relationships.length
+          ? `${relationsTotal} 条`
+          : `${relationships.length}/${relationsTotal}`"></span>
+        <button class="close" @click="showRelationsDrawer = false">
+          <svg width="12" height="12"><use href="#i-close"/></svg>
+        </button>
+      </h3>
+
+      <div class="rel-filters">
+        <input type="text"
+               x-model="relationsFilter.q"
+               placeholder="按姓名 / 备注过滤"
+               @input.debounce.300ms="loadRelationships()">
+        <div class="rel-filter-row">
+          <label>
+            <span>最低强度</span>
+            <select x-model.number="relationsFilter.min_strength"
+                    @change="loadRelationships()">
+              <option :value="0">不限</option>
+              <option :value="1">≥ 1</option>
+              <option :value="2">≥ 2</option>
+              <option :value="3">≥ 3</option>
+              <option :value="4">≥ 4</option>
+              <option :value="5">5</option>
+            </select>
+          </label>
+          <label>
+            <input type="checkbox"
+                   x-model="relationsFilter.include_me"
+                   @change="loadRelationships()">
+            <span>含 me 边</span>
+          </label>
+        </div>
+        <div class="chip-row" style="margin-top: 6px;">
+          <template x-for="src in ['manual','colleague_inferred','ai_inferred']" :key="src">
+            <span class="chip"
+                  :class="relationsFilter.sources.includes(src) ? 'active' : ''"
+                  @click="toggleRelationSourceFilter(src)"
+                  x-text="relationSourceLabel(src)"></span>
+          </template>
+        </div>
+      </div>
+
+      <template x-if="relationsLoading">
+        <div class="empty">加载中…</div>
+      </template>
+
+      <template x-if="!relationsLoading && relationships.length === 0">
+        <div class="empty">没有匹配的关系。换个筛选条件，或用「新关系」录入。</div>
+      </template>
+
+      <div class="rel-list">
+        <template x-for="r in relationships" :key="r.id">
+          <div class="rel-list-row">
+            <template x-if="editingRelationId !== r.id">
+              <div class="rel-list-display">
+                <div class="rel-list-head">
+                  <span class="rel-name"
+                        :class="r.a_is_me ? 'is-me' : ''"
+                        x-text="r.a_name"></span>
+                  <span class="rel-arrow">—</span>
+                  <span class="rel-name"
+                        :class="r.b_is_me ? 'is-me' : ''"
+                        x-text="r.b_name"></span>
+                  <span class="rel-strength-pill"
+                        :class="`s${r.strength}`"
+                        x-text="r.strength"></span>
+                  <span class="rel-source-pill"
+                        :class="`src-${r.source}`"
+                        x-text="relationSourceLabel(r.source)"></span>
+                </div>
+                <template x-if="r.context">
+                  <div class="rel-list-context" x-text="r.context"></div>
+                </template>
+                <div class="rel-list-meta">
+                  <span x-text="`频率：${frequencyLabel(r.frequency)}`"></span>
+                </div>
+              </div>
+            </template>
+
+            <template x-if="editingRelationId === r.id">
+              <div class="rel-list-edit">
+                <div class="rel-row-head">
+                  <span class="rel-name" x-text="r.a_name"></span>
+                  <span class="rel-arrow">—</span>
+                  <span class="rel-name" x-text="r.b_name"></span>
+                </div>
+                <div class="rel-row-controls">
+                  <label>
+                    <span>强度</span>
+                    <select x-model.number="editingRelation.strength">
+                      <option :value="1">1 · 远</option>
+                      <option :value="2">2</option>
+                      <option :value="3">3 · 中</option>
+                      <option :value="4">4</option>
+                      <option :value="5">5 · 近</option>
+                    </select>
+                  </label>
+                  <label>
+                    <span>频率</span>
+                    <select x-model="editingRelation.frequency">
+                      <option value="weekly">每周</option>
+                      <option value="monthly">每月</option>
+                      <option value="quarterly">每季</option>
+                      <option value="yearly">每年</option>
+                      <option value="rare">极少</option>
+                    </select>
+                  </label>
+                  <label class="rel-context-input">
+                    <span>备注</span>
+                    <input type="text" x-model="editingRelation.context" placeholder="备注">
+                  </label>
+                </div>
+                <div class="rel-list-edit-actions">
+                  <button class="btn"
+                          @click="cancelEditRelation()">取消</button>
+                  <button class="btn primary"
+                          :disabled="editingRelationBusy"
+                          @click="saveEditRelation()">
+                    <span x-text="editingRelationBusy ? '保存中…' : '保存'"></span>
+                  </button>
+                </div>
+              </div>
+            </template>
+
+            <template x-if="editingRelationId !== r.id">
+              <div class="rel-list-actions">
+                <button class="icon-btn" title="编辑" @click="startEditRelation(r)">
+                  <svg width="13" height="13"><use href="#i-edit"/></svg>
+                </button>
+                <button class="icon-btn danger" title="删除" @click="deleteRelation(r)">
+                  <svg width="13" height="13"><use href="#i-trash"/></svg>
+                </button>
+              </div>
+            </template>
+          </div>
+        </template>
+      </div>
+
+      <template x-if="!relationsLoading && relationships.length < relationsTotal">
+        <button class="btn rel-load-more"
+                @click="loadMoreRelationships()"
+                :disabled="relationsLoadingMore">
+          <span x-text="relationsLoadingMore
+            ? '加载中…'
+            : `加载更多（剩 ${relationsTotal - relationships.length}）`"></span>
+        </button>
+      </template>
     </div>
   </template>
 

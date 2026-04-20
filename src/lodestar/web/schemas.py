@@ -249,3 +249,91 @@ class PersonDTO(BaseModel):
             tags=p.tags, skills=p.skills, companies=p.companies,
             cities=p.cities, needs=p.needs, related=related,
         )
+
+
+# =====================================================================
+# Relationships — browse, edit, NL-parse
+# =====================================================================
+
+
+class RelationshipDTO(BaseModel):
+    """A single peer↔peer or me↔contact edge in the owner's subgraph.
+
+    `a_*` and `b_*` mirror the underlying `source_id` / `target_id`
+    columns — the orientation is preserved (writes to the DB go in the
+    same direction the user picked) but downstream UI treats edges as
+    undirected.
+    """
+
+    id: int
+    a_id: int
+    a_name: str
+    b_id: int
+    b_name: str
+    strength: int
+    context: str | None = None
+    frequency: str
+    source: str  # 'manual' | 'colleague_inferred' | 'ai_inferred'
+    a_is_me: bool = False
+    b_is_me: bool = False
+
+
+class ProposedEdge(BaseModel):
+    """One edge proposed by the LLM on top of free-form text input.
+
+    The LLM is told NOT to invent a strength when the user didn't say
+    so — `strength` may therefore be None. The frontend forces the user
+    to pick a value before letting them submit.
+    """
+
+    a_id: int
+    a_name: str
+    b_id: int
+    b_name: str
+    strength: int | None = None
+    context: str | None = None
+    frequency: str | None = None
+    rationale: str | None = None
+    existing_edge: RelationshipDTO | None = None
+
+
+class RelationshipParseRequest(BaseModel):
+    text: str = Field(min_length=1)
+
+
+class RelationshipParseResponse(BaseModel):
+    proposals: list[ProposedEdge] = []
+    unknown_mentions: list[str] = []
+    context_for: dict[int, list[RelationshipDTO]] = {}
+    error: str | None = None
+
+
+class RelationshipApplyItem(BaseModel):
+    a_id: int
+    b_id: int
+    strength: int = Field(ge=1, le=5)
+    context: str | None = None
+    frequency: Frequency = Frequency.YEARLY
+
+
+class RelationshipApplyRequest(BaseModel):
+    edges: list[RelationshipApplyItem]
+
+
+class RelationshipApplyResponse(BaseModel):
+    applied: int
+    skipped: int
+    items: list[RelationshipDTO] = []
+
+
+class RelationshipUpdateRequest(BaseModel):
+    strength: int | None = Field(default=None, ge=1, le=5)
+    context: str | None = None
+    frequency: Frequency | None = None
+
+
+class RelationshipListResponse(BaseModel):
+    items: list[RelationshipDTO]
+    total: int
+    offset: int
+    limit: int

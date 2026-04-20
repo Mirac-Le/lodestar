@@ -30,6 +30,11 @@ from lodestar.enrich.normalizer import (
     cluster_with_llm,
     load_alias_file,
 )
+from lodestar.enrich.relationship_parser import (
+    ProposedEdge,
+    RelationshipParseResult,
+    RelationshipParser,
+)
 
 __all__ = [
     "AliasGroup",
@@ -39,6 +44,9 @@ __all__ = [
     "L1Result",
     "LLMClient",
     "LLMError",
+    "ProposedEdge",
+    "RelationshipParseResult",
+    "RelationshipParser",
     "build_groups",
     "cluster_with_llm",
     "load_alias_file",

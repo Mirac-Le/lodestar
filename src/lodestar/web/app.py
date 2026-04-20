@@ -44,6 +44,14 @@ from lodestar.web.schemas import (
     PathResultDTO,
     PathStepDTO,
     PersonDTO,
+    ProposedEdge as ProposedEdgeDTO,
+    RelationshipApplyRequest,
+    RelationshipApplyResponse,
+    RelationshipDTO,
+    RelationshipListResponse,
+    RelationshipParseRequest,
+    RelationshipParseResponse,
+    RelationshipUpdateRequest,
     SearchRequest,
     SearchResponse,
     StatsResponse,
@@ -137,6 +145,34 @@ def _path_result_to_dto(r: PathResult) -> PathResultDTO:
         is_wishlist=r.target.is_wishlist,
         node_ids=node_ids,
         edge_ids=edge_ids,
+    )
+
+
+def _relationship_to_dto(
+    rel: Relationship,
+    name_lookup: dict[int, str],
+    me_id: int | None,
+) -> RelationshipDTO | None:
+    """Render a Relationship row as a flat DTO. Returns None when either
+    endpoint isn't visible to the current owner (name_lookup miss)."""
+    if rel.id is None:
+        return None
+    a_name = name_lookup.get(rel.source_id)
+    b_name = name_lookup.get(rel.target_id)
+    if a_name is None or b_name is None:
+        return None
+    return RelationshipDTO(
+        id=rel.id,
+        a_id=rel.source_id,
+        a_name=a_name,
+        b_id=rel.target_id,
+        b_name=b_name,
+        strength=rel.strength,
+        context=rel.context,
+        frequency=rel.frequency.value,
+        source=rel.source,
+        a_is_me=(me_id is not None and rel.source_id == me_id),
+        b_is_me=(me_id is not None and rel.target_id == me_id),
     )
 
 
@@ -690,6 +726,239 @@ def create_app() -> FastAPI:
         if state is None:
             raise HTTPException(404, f"Unknown enrich task '{task_id}'")
         return EnrichJobState(**state.to_dict())
+
+    # ---------- relationships (browse / NL parse / apply / edit)
+
+    def _owner_name_lookup(
+        repo: Repository, owner_id: int
+    ) -> tuple[dict[int, str], int | None]:
+        """{person_id: name} for everyone visible to this owner, plus
+        that owner's me_id (None if missing)."""
+        people = repo.list_people(owner_id=owner_id)
+        me = repo.get_me(owner_id=owner_id)
+        lookup: dict[int, str] = {p.id: p.name for p in people if p.id is not None}
+        me_id: int | None = None
+        if me is not None and me.id is not None:
+            lookup[me.id] = me.name
+            me_id = me.id
+        return lookup, me_id
+
+    @app.get("/api/relationships", response_model=RelationshipListResponse)
+    def list_relationships_endpoint(
+        owner: str | None = Query(None),
+        q: str | None = Query(None),
+        min_strength: int | None = Query(None, ge=1, le=5),
+        source: str | None = Query(
+            None,
+            description="Comma-separated subset of {manual,colleague_inferred,ai_inferred}",
+        ),
+        include_me: bool = Query(
+            True,
+            description="If False, drop edges that touch the owner's me node.",
+        ),
+        person_id: int | None = Query(None, description="Only edges touching this person."),
+        offset: int = Query(0, ge=0),
+        limit: int = Query(100, ge=1, le=500),
+        repo: Repository = Depends(get_repo),
+    ) -> RelationshipListResponse:
+        owner_obj = _resolve_owner(repo, owner)
+        assert owner_obj.id is not None
+        name_lookup, me_id = _owner_name_lookup(repo, owner_obj.id)
+        rels = repo.list_relationships(owner_id=owner_obj.id)
+
+        sources_filter: set[str] | None = None
+        if source:
+            sources_filter = {s.strip() for s in source.split(",") if s.strip()}
+
+        q_clean = (q or "").strip().lower()
+        items: list[RelationshipDTO] = []
+        for r in rels:
+            dto = _relationship_to_dto(r, name_lookup, me_id)
+            if dto is None:
+                continue
+            if not include_me and (dto.a_is_me or dto.b_is_me):
+                continue
+            if person_id is not None and dto.a_id != person_id and dto.b_id != person_id:
+                continue
+            if min_strength is not None and dto.strength < min_strength:
+                continue
+            if sources_filter is not None and dto.source not in sources_filter:
+                continue
+            if q_clean and (
+                q_clean not in dto.a_name.lower()
+                and q_clean not in dto.b_name.lower()
+                and q_clean not in (dto.context or "").lower()
+            ):
+                continue
+            items.append(dto)
+
+        # Stable sort: me-edges first, then strength desc, then a_name.
+        items.sort(
+            key=lambda x: (
+                0 if (x.a_is_me or x.b_is_me) else 1,
+                -x.strength,
+                x.a_name,
+                x.b_name,
+            )
+        )
+        total = len(items)
+        paged = items[offset : offset + limit]
+        return RelationshipListResponse(
+            items=paged, total=total, offset=offset, limit=limit
+        )
+
+    @app.post("/api/relationships/parse", response_model=RelationshipParseResponse)
+    def parse_relationships(
+        body: RelationshipParseRequest,
+        owner: str | None = Query(None),
+        repo: Repository = Depends(get_repo),
+    ) -> RelationshipParseResponse:
+        """NL → 关系提案。不写库，只返回提案 + 上下文，让前端确认。"""
+        from lodestar.enrich import LLMClient, LLMError, RelationshipParser
+
+        owner_obj = _resolve_owner(repo, owner)
+        assert owner_obj.id is not None
+        try:
+            client = LLMClient()
+        except LLMError as exc:
+            raise HTTPException(503, str(exc)) from exc
+        parser = RelationshipParser(repo, owner_id=owner_obj.id, client=client)
+        result = parser.parse(body.text)
+
+        if result.error and not result.proposals and not result.unknown_mentions:
+            return RelationshipParseResponse(error=result.error)
+
+        name_lookup, me_id = _owner_name_lookup(repo, owner_obj.id)
+        all_rels = repo.list_relationships(owner_id=owner_obj.id)
+        # 索引现有边方便 O(1) 查 existing_edge：键用无序对。
+        edge_index: dict[tuple[int, int], RelationshipDTO] = {}
+        # 同时按人聚合所有现有边，用于 context_for。
+        by_person: dict[int, list[RelationshipDTO]] = {}
+        for r in all_rels:
+            dto = _relationship_to_dto(r, name_lookup, me_id)
+            if dto is None:
+                continue
+            lo, hi = (dto.a_id, dto.b_id) if dto.a_id <= dto.b_id else (dto.b_id, dto.a_id)
+            edge_index[(lo, hi)] = dto
+            by_person.setdefault(dto.a_id, []).append(dto)
+            by_person.setdefault(dto.b_id, []).append(dto)
+
+        proposals_out: list[ProposedEdgeDTO] = []
+        mentioned_pids: set[int] = set()
+        for p in result.proposals:
+            lo, hi = (p.a_id, p.b_id) if p.a_id <= p.b_id else (p.b_id, p.a_id)
+            existing = edge_index.get((lo, hi))
+            mentioned_pids.update({p.a_id, p.b_id})
+            proposals_out.append(
+                ProposedEdgeDTO(
+                    a_id=p.a_id,
+                    a_name=p.a_name,
+                    b_id=p.b_id,
+                    b_name=p.b_name,
+                    strength=p.strength,
+                    context=p.context,
+                    frequency=p.frequency,
+                    rationale=p.rationale,
+                    existing_edge=existing,
+                )
+            )
+
+        context_for = {pid: by_person.get(pid, []) for pid in mentioned_pids}
+
+        return RelationshipParseResponse(
+            proposals=proposals_out,
+            unknown_mentions=result.unknown_mentions,
+            context_for=context_for,
+            error=result.error,
+        )
+
+    @app.post(
+        "/api/relationships/apply", response_model=RelationshipApplyResponse
+    )
+    def apply_relationships(
+        body: RelationshipApplyRequest,
+        owner: str | None = Query(None),
+        repo: Repository = Depends(get_repo),
+    ) -> RelationshipApplyResponse:
+        owner_obj = _resolve_owner(repo, owner)
+        assert owner_obj.id is not None
+        owner_pids = repo.list_owner_person_ids(owner_obj.id)
+        name_lookup, me_id = _owner_name_lookup(repo, owner_obj.id)
+
+        applied = 0
+        skipped = 0
+        out_dtos: list[RelationshipDTO] = []
+        for item in body.edges:
+            if item.a_id == item.b_id:
+                skipped += 1
+                continue
+            # owner 隔离：两端必须都在该 owner 的可见集合里（或是该 owner 的 me）。
+            if item.a_id not in owner_pids or item.b_id not in owner_pids:
+                skipped += 1
+                continue
+            rel = Relationship(
+                source_id=item.a_id,
+                target_id=item.b_id,
+                strength=item.strength,
+                context=item.context,
+                frequency=item.frequency,
+                source="manual",
+            )
+            saved = repo.add_relationship(rel, owner_id=owner_obj.id)
+            applied += 1
+            dto = _relationship_to_dto(saved, name_lookup, me_id)
+            if dto is not None:
+                out_dtos.append(dto)
+        return RelationshipApplyResponse(
+            applied=applied, skipped=skipped, items=out_dtos
+        )
+
+    @app.patch(
+        "/api/relationships/{rel_id}", response_model=RelationshipDTO
+    )
+    def update_relationship(
+        rel_id: int,
+        body: RelationshipUpdateRequest,
+        owner: str | None = Query(None),
+        repo: Repository = Depends(get_repo),
+    ) -> RelationshipDTO:
+        owner_obj = _resolve_owner(repo, owner)
+        assert owner_obj.id is not None
+        rels = repo.list_relationships(owner_id=owner_obj.id)
+        target = next((r for r in rels if r.id == rel_id), None)
+        if target is None:
+            raise HTTPException(404, f"Relationship {rel_id} not found in this owner.")
+        new_rel = Relationship(
+            id=target.id,
+            source_id=target.source_id,
+            target_id=target.target_id,
+            strength=body.strength if body.strength is not None else target.strength,
+            context=body.context if body.context is not None else target.context,
+            frequency=body.frequency if body.frequency is not None else target.frequency,
+            source="manual",  # 任何手工编辑都标记为 manual
+        )
+        saved = repo.add_relationship(new_rel, owner_id=owner_obj.id)
+        name_lookup, me_id = _owner_name_lookup(repo, owner_obj.id)
+        dto = _relationship_to_dto(saved, name_lookup, me_id)
+        if dto is None:
+            raise HTTPException(500, "Failed to render updated relationship.")
+        return dto
+
+    @app.delete("/api/relationships/{rel_id}")
+    def delete_relationship(
+        rel_id: int,
+        owner: str | None = Query(None),
+        repo: Repository = Depends(get_repo),
+    ) -> dict:
+        owner_obj = _resolve_owner(repo, owner)
+        assert owner_obj.id is not None
+        rels = repo.list_relationships(owner_id=owner_obj.id)
+        target = next((r for r in rels if r.id == rel_id), None)
+        if target is None:
+            raise HTTPException(404, f"Relationship {rel_id} not found in this owner.")
+        with repo.conn:
+            repo.conn.execute("DELETE FROM relationship WHERE id = ?", (rel_id,))
+        return {"deleted": rel_id}
 
     # ---------- stats
     @app.get("/api/stats", response_model=StatsResponse)
