@@ -138,26 +138,22 @@ class ColumnMapping:
     number of source columns; their cell contents are concatenated and
     split on `,` `，` `、` `;` `；` `/` `｜`.
 
-    `kind_column` is binary — only two states matter, because the table
-    only describes facts ("did I reach this person?"), not intent ("who
-    do I want to talk to?"). Intent is parsed at query time by the LLM
-    from the user's natural-language prompt, not pre-baked into rows.
+    There is no separate `kind_column` — the "did I reach this person?"
+    fact is fully derivable from `strength_column`:
 
-        "已联系" / "contacted" / empty → Me→X edge with row's strength
-                                        (`可信度` column drives 1-5; if
-                                        you wanted "barely know them",
-                                        write 可信度=1 — there is no
-                                        separate "weak" bucket)
-        "未联系" / "uncontacted"      → NO Me-edge; this row marks "I have
-                                        not directly reached this person
-                                        yet, route only via other peers'
-                                        `认识` references". Surfaced in
-                                        the UI via `Person.is_wishlist=True`.
+        可信度 == 0 → 未联系: NO Me-edge built; `Person.is_wishlist=True`,
+                      reachable only via peers' `认识` references.
+        可信度 1-5  → 已联系: Me-edge with that strength (1=barely know,
+                      5=core inner circle).
 
-    Strict vocabulary, no backward compat: the historical values
-    "直接 / 弱认识 / 目标 / 想认识 / target / 陌生" are no longer
-    recognised — they all collapse silently to the default `已联系`
-    because closeness is now expressed solely through `可信度`.
+    Keeping these in a single column eliminates the redundancy of the
+    old `kind_column` (whose only signal was "is this row at strength 0
+    or not?") and removes the contradiction surface where `关系类型=已联系`
+    + `可信度=0` was syntactically possible but semantically nonsense.
+
+    The table only records facts. Intent ("who do I want to talk to
+    next?") is parsed at query time by the LLM from the user's natural
+    -language prompt, never pre-baked into rows.
     """
 
     name: str
@@ -171,29 +167,6 @@ class ColumnMapping:
     strength_column: str | None = None
     context_column: str | None = None
     peers_column: str | None = None
-    kind_column: str | None = None
-
-
-_KIND_CONTACTED = "contacted"
-_KIND_UNCONTACTED = "uncontacted"
-
-
-def _normalize_kind(raw: str) -> str:
-    """Map cell values to one of the two canonical kinds.
-
-    Binary by design: a person is either someone you've reached
-    (`contacted`) or someone you haven't (`uncontacted`). Closeness
-    among the contacted ones is expressed via `可信度` (strength 1-5),
-    not via a separate "weak" bucket — that bucket was always just
-    a shortcut for `strength=1` and double-encoded the same idea.
-
-    Strict vocabulary, no backward compat: legacy values like
-    "直接 / 弱认识 / 目标 / 想认识 / target / 陌生" are no longer
-    recognised and silently fall through to the default `已联系`."""
-    text = raw.strip().lower()
-    if text in {"未联系", "uncontacted"}:
-        return _KIND_UNCONTACTED
-    return _KIND_CONTACTED
 
 
 def richard_finance_preset() -> ColumnMapping:
@@ -338,7 +311,6 @@ def extended_network_preset() -> ColumnMapping:
         strength_column="可信度（言行一致性0-5分）",
         context_column="职务",
         peers_column="认识",
-        kind_column="关系类型",
     )
 
 
@@ -463,10 +435,12 @@ class ExcelImporter:
         if not name:
             return False
 
-        # Decide whether (and how) to build the Me → Person edge.
-        kind_raw = _cell(row.get(self._mapping.kind_column)) if self._mapping.kind_column else ""
-        kind = _normalize_kind(kind_raw)
-        is_wishlist_row = kind == _KIND_UNCONTACTED
+        # The "did I reach this person?" fact is derived directly from
+        # the strength column: 0 = 未联系 (no Me-edge, wishlist), 1-5 =
+        # 已联系 (Me-edge built with that strength). One column, no
+        # contradiction surface.
+        strength = self._parse_strength(row)
+        is_wishlist_row = strength == 0
 
         person = Person(
             name=name,
@@ -504,17 +478,12 @@ class ExcelImporter:
         if self._owner_id is not None:
             self._repo.attach_person_to_owner(saved.id, self._owner_id)
 
-        if kind == _KIND_UNCONTACTED:
-            # 「未联系」rows have NO Me-edge; they are reachable only via
-            # peers' `认识` references in pass 2. The is_wishlist flag is
-            # already persisted above and is decoupled from path topology
-            # (search/ranking treats every contact equally regardless of it).
+        if is_wishlist_row:
+            # 可信度=0 → 未联系: skip the Me-edge entirely. Reachable only
+            # via peers' `认识` references in pass 2. is_wishlist is already
+            # persisted above and is decoupled from path topology — search
+            # and ranking treat every contact equally regardless of it.
             return True
-
-        # Contacted: build the Me-edge using strength from the 可信度 column.
-        # No special "weak" shortcut — if the user wants a faint edge they
-        # just write 可信度=1.
-        strength = self._parse_strength(row)
 
         context = (
             _cell(row.get(self._mapping.context_column)) if self._mapping.context_column else ""
@@ -707,6 +676,10 @@ class ExcelImporter:
         return out
 
     def _parse_strength(self, row: dict[str, object]) -> int:
+        """Parse 可信度 0-5; **0 is meaningful** (means 未联系 — no Me-edge,
+        is_wishlist=True). Empty / non-numeric → 3 (普通朋友) which is a
+        safe default for "I forgot to fill this", because it preserves a
+        Me-edge rather than silently demoting the row to wishlist."""
         col = self._mapping.strength_column
         if col is None:
             return 3
@@ -715,7 +688,7 @@ class ExcelImporter:
             value = int(raw) if raw is not None else 3  # type: ignore[arg-type]
         except (ValueError, TypeError):
             return 3
-        return max(1, min(5, value))
+        return max(0, min(5, value))
 
 
 def _canonical_pair(a: int, b: int) -> tuple[int, int]:

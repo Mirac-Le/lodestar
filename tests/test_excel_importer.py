@@ -90,20 +90,19 @@ def test_needs_are_searchable(repo: Repository, tmp_path: Path) -> None:
     assert wang.id in hits  # '客户多' also matches '客户'
 
 
-def test_kind_uncontacted_sets_wishlist_and_skips_me_edge(
+def test_strength_zero_marks_uncontacted_and_skips_me_edge(
     repo: Repository, tmp_path: Path,
 ) -> None:
-    """`关系类型 = 未联系` must set Person.is_wishlist=True (curation flag) AND
-    skip the Me-edge (so reach is forced through peers). Earlier the only
-    observable signal was the missing edge — the curation intent was lost."""
+    """The single source of truth for "did I reach this person?" is the
+    `可信度` column: 0 → 未联系 (no Me-edge, is_wishlist=True), 1-5 →
+    已联系 (Me-edge with that strength). No separate `关系类型` column."""
     from lodestar.importers import ExcelImporter, extended_network_preset
 
     repo.ensure_me(name="我")
     df = pl.DataFrame({
-        "姓名": ["张三", "想认识一号"],
-        "所属行业": ["私募", "并购投行"],
-        "关系类型": ["已联系", "未联系"],
-        "可信度（言行一致性0-5分）": [4, 0],
+        "姓名": ["张三", "想认识一号", "缺值默认"],
+        "所属行业": ["私募", "并购投行", "FOF"],
+        "可信度（言行一致性0-5分）": [4, 0, None],
     })
     xlsx_path = tmp_path / "wish.xlsx"
     df.write_excel(xlsx_path)
@@ -112,54 +111,58 @@ def test_kind_uncontacted_sets_wishlist_and_skips_me_edge(
 
     star = repo.find_person_by_name("想认识一号")
     assert star is not None
-    assert star.is_wishlist is True
+    assert star.is_wishlist is True, "可信度=0 must imply is_wishlist=True"
     rels = repo.list_relationships()
     assert all(r.target_id != star.id for r in rels), \
-        "uncontacted (wishlist) contact must NOT have a Me-edge"
+        "可信度=0 contact must NOT have a Me-edge"
 
     zhang = repo.find_person_by_name("张三")
     assert zhang is not None
     assert zhang.is_wishlist is False
+    zhang_rels = [r for r in rels if r.target_id == zhang.id]
+    assert len(zhang_rels) == 1 and zhang_rels[0].strength == 4
+
+    # Blank 可信度 falls back to the default 3 (普通朋友) — NOT to 0.
+    # Otherwise empty cells would silently demote contacts to wishlist,
+    # which is the worst possible default behaviour.
+    blank = repo.find_person_by_name("缺值默认")
+    assert blank is not None
+    assert blank.is_wishlist is False, "blank 可信度 must default to contacted, not wishlist"
+    blank_rels = [r for r in rels if r.target_id == blank.id]
+    assert len(blank_rels) == 1 and blank_rels[0].strength == 3
 
 
-def test_kind_legacy_values_collapse_to_contacted(
+def test_legacy_关系类型_column_is_silently_ignored(
     repo: Repository, tmp_path: Path,
 ) -> None:
-    """The legacy vocabulary (`直接` / `弱认识` / `目标` / `target` /
-    `想认识` / `陌生`) is intentionally not recognised any more.
-    Only `已联系` / `contacted` / 留空 / `未联系` / `uncontacted` are
-    canonical. Anything else silently falls back to the default
-    `已联系` (= contacted) kind, which builds a Me-edge using the
-    row's `可信度`. This test pins the behavior so we don't silently
-    re-introduce alias drift, and crucially also verifies that the
-    deprecated `弱认识` no longer takes the strength=1 fast path —
-    closeness now comes solely from the 可信度 column."""
+    """Old workbooks may still carry a `关系类型` column. The new importer
+    has no `kind_column` mapping, so this column should be silently ignored
+    and behaviour should be driven purely by `可信度`. We use intentionally
+    contradictory values (legacy 关系类型 says one thing, 可信度 says the
+    opposite) and assert that 可信度 always wins."""
     from lodestar.importers import ExcelImporter, extended_network_preset
 
     repo.ensure_me(name="我")
     df = pl.DataFrame({
-        "姓名": ["旧词目标", "旧词弱认识"],
+        "姓名": ["A", "B"],
         "所属行业": ["VC", "PE"],
-        "关系类型": ["目标", "弱认识"],
-        "可信度（言行一致性0-5分）": [3, 4],
+        # legacy column says A is 未联系 + B is 已联系 — it must NOT take effect
+        "关系类型": ["未联系", "已联系"],
+        # truth: A 可信度=3 (so A is contacted) + B 可信度=0 (so B is uncontacted)
+        "可信度（言行一致性0-5分）": [3, 0],
     })
     xlsx_path = tmp_path / "legacy.xlsx"
     df.write_excel(xlsx_path)
 
     ExcelImporter(repo, mapping=extended_network_preset()).import_file(xlsx_path)
 
-    target = repo.find_person_by_name("旧词目标")
-    weak = repo.find_person_by_name("旧词弱认识")
-    assert target is not None and weak is not None
-    assert target.is_wishlist is False, \
-        "legacy '目标' must NOT silently behave as '未联系'"
-    assert weak.is_wishlist is False
+    a = repo.find_person_by_name("A")
+    b = repo.find_person_by_name("B")
+    assert a is not None and b is not None
+    assert a.is_wishlist is False, "可信度=3 wins over legacy 关系类型=未联系"
+    assert b.is_wishlist is True, "可信度=0 wins over legacy 关系类型=已联系"
     rels = repo.list_relationships()
-    target_rels = [r for r in rels if r.target_id == target.id]
-    weak_rels = [r for r in rels if r.target_id == weak.id]
-    assert len(target_rels) == 1, "legacy '目标' must fall back to a default Me-edge"
-    assert len(weak_rels) == 1, "legacy '弱认识' must fall back to a default Me-edge"
-    assert target_rels[0].strength == 3, \
-        "legacy '目标' edge must use 可信度, not the wishlist 0"
-    assert weak_rels[0].strength == 4, \
-        "legacy '弱认识' must NOT silently force strength=1 anymore — closeness is 可信度 only"
+    a_rels = [r for r in rels if r.target_id == a.id]
+    b_rels = [r for r in rels if r.target_id == b.id]
+    assert len(a_rels) == 1 and a_rels[0].strength == 3
+    assert b_rels == [], "可信度=0 row must not produce a Me-edge"
