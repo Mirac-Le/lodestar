@@ -4,10 +4,10 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1">
   <title>Lodestar — Personal Network Navigator</title>
-  <link rel="stylesheet" href="/static/style.css?v=20260420-nlrel">
+  <link rel="stylesheet" href="/static/style.css?v=20260420-pathfix">
   <script src="/static/cytoscape.min.js"></script>
   <script src="/static/echarts.min.js"></script>
-  <script defer src="/static/app.js?v=20260420-nlrel"></script>
+  <script defer src="/static/app.js?v=20260420-pathfix"></script>
   <script defer src="/static/alpine.min.js"></script>
 </head>
 <body x-data="appState()" x-init="init()" :class="searching ? 'searching' : ''">
@@ -197,7 +197,7 @@
   </div>
 
   <!-- ========== Top paths panel ========== -->
-  <template x-if="(indirect.length + direct.length + weak.length) > 0 && viewMode === 'intent'">
+  <template x-if="(indirect.length + contacted.length) > 0 && viewMode === 'intent'">
     <div class="panel panel-paths">
       <h3 x-text="pathMode ? '双人路径' : '引荐路径'">引荐路径
         <span class="ct"
