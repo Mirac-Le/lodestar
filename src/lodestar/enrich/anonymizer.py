@@ -241,6 +241,29 @@ class Anonymizer:
                 deduped.append(x)
         return deduped
 
+    def deanonymize_text(self, text: str | None) -> str | None:
+        """Reverse-substitute every `Pxxx` / `Cxxx` token back to the real
+        person / company name.
+
+        Used to unmask LLM-produced free-form strings (e.g. relationship
+        `rationale` quotes the anonymized input verbatim — without this we
+        leak tokens like `P052和P014是同事` straight to the UI).
+
+        Unknown tokens (e.g. `P999` we never issued) are kept verbatim so
+        the user can spot LLM hallucination instead of seeing it silently
+        deleted.
+        """
+        if not text:
+            return text
+        out = text
+        out = _P_TOKEN_RE.sub(
+            lambda m: self.name_for_person_token(m.group(0)) or m.group(0), out
+        )
+        out = _C_TOKEN_RE.sub(
+            lambda m: self.company_for_token(m.group(0)) or m.group(0), out
+        )
+        return out
+
     # ----------------------------------------------------------- internals
     @staticmethod
     def _safe_replace(text: str, needle: str, token: str) -> str:
@@ -268,3 +291,4 @@ class Anonymizer:
 
 
 _C_TOKEN_RE = re.compile(r"\bC\d{3}\b")
+_P_TOKEN_RE = re.compile(r"\bP\d{3}\b")

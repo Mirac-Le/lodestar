@@ -226,8 +226,13 @@ class RelationshipParser:
 
             strength = _coerce_strength(raw.get("strength"))
             frequency = _coerce_frequency(raw.get("frequency"))
-            context = _coerce_optional_str(raw.get("context"))
-            rationale = _coerce_optional_str(raw.get("rationale"))
+            # LLM 看到的是脱敏文本，所以 context / rationale 里可能直接
+            # 嵌着 Pxxx / Cxxx token（rationale 尤其常见，因为它就是引用
+            # 原句）。落到 ProposedEdge 之前先反匿名，避免泄露到 UI。
+            context = anon.deanonymize_text(_coerce_optional_str(raw.get("context")))
+            rationale = anon.deanonymize_text(
+                _coerce_optional_str(raw.get("rationale"))
+            )
 
             a_name = anon.name_for_person_token(a_tok) or f"P{a_id}"
             b_name = anon.name_for_person_token(b_tok) or f"P{b_id}"

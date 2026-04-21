@@ -205,6 +205,44 @@ def test_parse_owner_isolation(tmp_path: Path) -> None:
     conn.close()
 
 
+def test_parse_deanonymizes_rationale_and_context(
+    parser_setup: tuple[Repository, int, dict[str, int], _FakeLLMClient],
+) -> None:
+    """Real-world LLMs quote the *anonymized* prompt back inside `rationale`
+    (and sometimes `context`). We must reverse-substitute Pxxx/Cxxx tokens
+    before exposing those strings to the UI — otherwise the user sees
+    `原文：[P052和P014是同事]` instead of real names.
+    """
+    repo, owner_id, pids, fake = parser_setup
+    fake.responses.append(
+        {
+            "edges": [
+                {
+                    "a": "P001",
+                    "b": "P002",
+                    "strength": 4,
+                    "frequency": "monthly",
+                    # Both fields contain anonymized tokens — the parser
+                    # should deanonymize before returning.
+                    "context": "P001 和 P002 在 C001 一起工作",
+                    "rationale": "原文：『P001 和 P002 是 C001 同事』",
+                }
+            ],
+            "unknown_mentions": [],
+        }
+    )
+    parser = RelationshipParser(repo, owner_id=owner_id, client=fake)
+    result = parser.parse("Alice 和 Bob 是 Acme 同事")
+
+    assert len(result.proposals) == 1
+    e = result.proposals[0]
+    # Token names are gone; real names + company are visible.
+    assert e.context == "Alice 和 Bob 在 Acme 一起工作"
+    assert e.rationale == "原文：『Alice 和 Bob 是 Acme 同事』"
+    assert "P001" not in (e.rationale or "")
+    assert "C001" not in (e.context or "")
+
+
 def test_parse_handles_no_contacts(tmp_path: Path) -> None:
     db: Path = tmp_path / "empty.db"
     conn = connect(db)
