@@ -105,11 +105,36 @@
 
 回归：`uv run pytest` 全过（63 passed, 1 skipped），无 regression。
 
-## 5. 没做 / 留给下一轮
+## 5. silver → gold 升级（2026-04-21 当日完成）
+
+初版 silver 由 AI 按 bio/tag 字面规则生成，跑出来发现两类系统性偏差：
+
+- **漏标本人**：依赖 tag 字面命中，把需要业内常识才能判断的本人漏掉。比如 `r-rolecliff-1` 漏了王一平（进化论 = 国内百亿量化私募）/ 纪少敏（神明投资 = 一线游资派）；`t-onehop-1` 漏了中金财富整条线（尹强/罗钢青等 FOF/财富管理基金经理）；`t-longt-3` 家办派系只标了 1 人，实际网络里有 7 个家办负责人。
+- **过度紧的 ground truth set**：很多 query 的本人有 4-7 个，silver 卡在 top-3 反而把"对的人没在 top-3"算成失败。
+
+当天对照 richard（64 人）+ tommy（110 人）两个 owner 的全网络人画像，用业内常识逐条 audit 了 20 条 query，把 yaml 整体升级到 gold（详细变更见提交 message）。Schema 里 `expected_top3` 字段语义改成"应进 top-5 的本人集合"，集合大小不限于 3。
+
+升级后重跑同一份评测：
+
+| 指标 | silver baseline | silver llm | gold baseline | gold llm | LLM 在 gold 下真实增益 |
+|---|---:|---:|---:|---:|---:|
+| Recall@5 | 0.625 | 0.633 | **0.485** | **0.602** | **+0.117** |
+| MRR | 0.568 | 0.700 | **0.479** | **0.713** | **+0.234** |
+| NDCG@10 | 0.530 | 0.609 | **0.421** | **0.617** | **+0.196** |
+| cliff-avoid | 0.850 | 0.900 | 0.850 | 0.850 | 0 |
+
+两个观察：
+
+1. **gold baseline 的分数反而比 silver baseline 低**——这就是 silver 在自我恭维，"对自己宽容"地高估了 baseline 的实际质量；
+2. **gold 下 LLM rerank 的相对增益（R@5 +0.117 / MRR +0.234 / NDCG +0.196）远大于 silver 下（R@5 +0.008）**——silver 因为漏标，把 LLM 把对的人选进 top-5 这件事算成了"和 baseline 一样命中 silver 列出的那一个人"，无法反映真实差异。
+
+**结论**：silver 是冷启动评测的可行 fallback，但**只要愿意一次性花一小时人工 audit 全网络**，就应该升到 gold；后续指标读起来才有可信度。
+
+## 6. 没做 / 留给下一轮
 
 按性价比从高到低：
 
-1. **silver → gold 升级**。`tests/fixtures/golden_queries.yaml` 顶部已写明升级路径；现在的 `expected_top3` / `must_not_include` 是基于 bio 字面规则推出来的，建议本人逐条 review `docs/golden_queries_review.md` 之后改成手填的 gold，未来评测才能真正反映"人脑认为应该谁排第一"。
+1. **LLM rerank 的剩余 cliff**。gold 评测显示 cliff-avoid 在 LLM 下没改善（0.850）——具体看 `t-rolecliff-1`，LLM 把朱越凡（中金 FOF 经理）排进了 top-5。原因是 prompt 里"本人/桥梁/无关"三分类对"FOF 经理 vs 私募创始人"这种近似职业的区分不够锐。建议把 prompt 加一条"FOF 经理是引荐桥梁不是私募实控人"的示例。
 2. **LLM judge 的延迟优化**。当前 22s/query 主要是云端 Qwen 串行 + prompt 偏长。三个可压方向：
    - 候选数从 30 砍到 15（看下 NDCG 损失多少）；
    - 把 prompt 换成 batch 模式（一次 call 把全部候选打包）——已是；当前其实就是一次 call，瓶颈在 token 数；
@@ -119,7 +144,7 @@
    - GoalParser 加同义词扩展（铁磁 → 老朋友 / 死党 / 强信任）。
 4. **CHANGELOG**。仓库目前没有 CHANGELOG.md，本轮没新建。如果未来要建议从这一轮起步，把 stage-2 reranker 作为首条 entry。
 
-## 6. 怎么用 / 怎么验证
+## 7. 怎么用 / 怎么验证
 
 ```bash
 # 默认（不重排，跟上一版完全一样）

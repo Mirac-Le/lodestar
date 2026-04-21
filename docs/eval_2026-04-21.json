@@ -7,9 +7,9 @@
       "owner": "richard",
       "goal": "我想找量化私募老总",
       "expected_top3": [
+        "王一平",
         "李靖",
-        "建国哥",
-        "阿杜"
+        "建国哥"
       ],
       "must_not_include": [
         "俞汉清",
@@ -49,7 +49,8 @@
       "expected_top3": [
         "廉向金",
         "宋伟",
-        "陈宝岩"
+        "陈宝岩",
+        "蔡长余"
       ],
       "must_not_include": []
     },
@@ -61,6 +62,8 @@
       "expected_top3": [
         "李靖",
         "胡77",
+        "王一平",
+        "大钊",
         "王毓"
       ],
       "must_not_include": []
@@ -93,8 +96,10 @@
       "goal": "我想接触可投资金的资金方",
       "expected_top3": [
         "大钊",
-        "阿杜",
-        "张坤"
+        "张坤",
+        "王强",
+        "崔宁",
+        "吴忠超"
       ],
       "must_not_include": []
     },
@@ -106,7 +111,8 @@
       "expected_top3": [
         "大钊",
         "建国哥",
-        "张坤"
+        "崔宁",
+        "纪少敏"
       ],
       "must_not_include": []
     },
@@ -117,6 +123,7 @@
       "goal": "想认识山东青岛的私募基金人",
       "expected_top3": [
         "建国哥",
+        "纪少敏",
         "德民",
         "大钊"
       ],
@@ -128,9 +135,10 @@
       "owner": "tommy",
       "goal": "我想找头部量化私募的创始人或实控人",
       "expected_top3": [
+        "梁健",
         "但斌",
-        "张桂林",
-        "梁健"
+        "张小白",
+        "高源"
       ],
       "must_not_include": [
         "朱越凡",
@@ -170,7 +178,9 @@
       "expected_top3": [
         "刘辛蕊",
         "于斌",
-        "黄博润"
+        "黄博润",
+        "晁亚新",
+        "徐文伟"
       ],
       "must_not_include": []
     },
@@ -181,8 +191,10 @@
       "goal": "我想找有海外或外资背景的资金 / LP",
       "expected_top3": [
         "常宇亮",
-        "但斌",
-        "邢自强"
+        "邢自强",
+        "王方",
+        "熊博",
+        "王雪源"
       ],
       "must_not_include": []
     },
@@ -213,7 +225,13 @@
       "owner": "tommy",
       "goal": "我想找做家族办公室管理的人",
       "expected_top3": [
-        "刘俊峤"
+        "何彦林",
+        "刘俊峤",
+        "王瑞芳",
+        "白堡屹",
+        "陈京涛",
+        "马莉",
+        "王方"
       ],
       "must_not_include": []
     },
@@ -224,7 +242,9 @@
       "goal": "认识中金的 FOF 或财富管理基金经理",
       "expected_top3": [
         "朱越凡",
-        "付雷"
+        "付雷",
+        "尹强",
+        "罗钢青"
       ],
       "must_not_include": []
     },
@@ -236,7 +256,10 @@
       "expected_top3": [
         "张千千",
         "徐楷",
-        "戎捷"
+        "戎捷",
+        "黄达",
+        "李峰屏",
+        "李紫祎"
       ],
       "must_not_include": []
     }
@@ -252,14 +275,14 @@
           "俞汉清",
           "胡77",
           "李靖",
-          "阿杜",
-          "大钊"
+          "Yuki陈",
+          "阿杜"
         ],
-        "recall_at_5": 0.6666666666666666,
+        "recall_at_5": 0.3333333333333333,
         "mrr": 0.3333333333333333,
-        "ndcg_at_10": 0.4367467095119258,
+        "ndcg_at_10": 0.23463936301137822,
         "cliff_hit": true,
-        "elapsed_ms": 247.48647678643465
+        "elapsed_ms": 258.32795072346926
       },
       {
         "query_id": "r-rolecliff-2",
@@ -274,7 +297,7 @@
         "mrr": 1.0,
         "ndcg_at_10": 1.0,
         "cliff_hit": true,
-        "elapsed_ms": 165.60090612620115
+        "elapsed_ms": 163.47587574273348
       },
       {
         "query_id": "r-rolecliff-3",
@@ -290,7 +313,7 @@
         "mrr": 1.0,
         "ndcg_at_10": 1.0,
         "cliff_hit": false,
-        "elapsed_ms": 363.0810137838125
+        "elapsed_ms": 145.4456578940153
       },
       {
         "query_id": "r-ambig-1",
@@ -302,7 +325,7 @@
         "mrr": 0.0,
         "ndcg_at_10": 0.0,
         "cliff_hit": false,
-        "elapsed_ms": 168.49281918257475
+        "elapsed_ms": 162.5075899064541
       },
       {
         "query_id": "r-ambig-2",
@@ -316,11 +339,11 @@
           "胡77",
           "李靖"
         ],
-        "recall_at_5": 0.6666666666666666,
-        "mrr": 0.25,
-        "ndcg_at_10": 0.38364913903790027,
+        "recall_at_5": 0.6,
+        "mrr": 0.3333333333333333,
+        "ndcg_at_10": 0.4468535299918563,
         "cliff_hit": false,
-        "elapsed_ms": 159.85321439802647
+        "elapsed_ms": 164.9608016014099
       },
       {
         "query_id": "r-longt-1",
@@ -329,13 +352,16 @@
         "variant": "none",
         "top_k_names": [
           "俞汉清",
-          "胡77"
+          "胡77",
+          "李靖",
+          "王毓",
+          "Yuki陈"
         ],
         "recall_at_5": 1.0,
         "mrr": 0.5,
         "ndcg_at_10": 0.6309297535714575,
         "cliff_hit": false,
-        "elapsed_ms": 178.32165211439133
+        "elapsed_ms": 261.8335857987404
       },
       {
         "query_id": "r-longt-2",
@@ -353,7 +379,7 @@
         "mrr": 1.0,
         "ndcg_at_10": 1.0,
         "cliff_hit": false,
-        "elapsed_ms": 157.85765647888184
+        "elapsed_ms": 211.3068262115121
       },
       {
         "query_id": "r-longt-3",
@@ -361,17 +387,17 @@
         "owner": "richard",
         "variant": "none",
         "top_k_names": [
-          "阿杜",
           "大钊",
           "杜海勇",
+          "阿杜",
           "夏熠",
           "阿竹"
         ],
-        "recall_at_5": 0.6666666666666666,
+        "recall_at_5": 0.2,
         "mrr": 1.0,
-        "ndcg_at_10": 0.7653606369886217,
+        "ndcg_at_10": 0.3391602052736161,
         "cliff_hit": false,
-        "elapsed_ms": 406.3687091693282
+        "elapsed_ms": 152.57525350898504
       },
       {
         "query_id": "r-onehop-1",
@@ -383,7 +409,7 @@
         "mrr": 0.0,
         "ndcg_at_10": 0.0,
         "cliff_hit": false,
-        "elapsed_ms": 144.72539722919464
+        "elapsed_ms": 151.3178674504161
       },
       {
         "query_id": "r-onehop-2",
@@ -397,11 +423,11 @@
           "阿裕",
           "建国哥"
         ],
-        "recall_at_5": 1.0,
+        "recall_at_5": 0.75,
         "mrr": 1.0,
-        "ndcg_at_10": 0.8854598815714874,
+        "ndcg_at_10": 0.7365896932159578,
         "cliff_hit": false,
-        "elapsed_ms": 1137.4965393915772
+        "elapsed_ms": 184.3359936028719
       },
       {
         "query_id": "t-rolecliff-1",
@@ -415,11 +441,11 @@
           "但斌",
           "李笛"
         ],
-        "recall_at_5": 0.3333333333333333,
+        "recall_at_5": 0.25,
         "mrr": 0.25,
-        "ndcg_at_10": 0.20210734650054757,
+        "ndcg_at_10": 0.16812753627111746,
         "cliff_hit": false,
-        "elapsed_ms": 268.75878497958183
+        "elapsed_ms": 163.34410570561886
       },
       {
         "query_id": "t-rolecliff-2",
@@ -437,7 +463,7 @@
         "mrr": 0.3333333333333333,
         "ndcg_at_10": 0.23463936301137822,
         "cliff_hit": true,
-        "elapsed_ms": 154.07767239958048
+        "elapsed_ms": 184.84931159764528
       },
       {
         "query_id": "t-rolecliff-3",
@@ -445,17 +471,17 @@
         "owner": "tommy",
         "variant": "none",
         "top_k_names": [
+          "顾励",
+          "胡伟华",
           "邱捷铭",
           "易卫东",
-          "李嘉祺",
-          "赵凯",
           "徐楷"
         ],
         "recall_at_5": 1.0,
-        "mrr": 1.0,
-        "ndcg_at_10": 1.0,
+        "mrr": 0.3333333333333333,
+        "ndcg_at_10": 0.5706417189553201,
         "cliff_hit": false,
-        "elapsed_ms": 209.5274580642581
+        "elapsed_ms": 293.6603771522641
       },
       {
         "query_id": "t-ambig-1",
@@ -469,11 +495,11 @@
           "刘辛蕊",
           "向雯琦"
         ],
-        "recall_at_5": 1.0,
+        "recall_at_5": 0.8,
         "mrr": 1.0,
-        "ndcg_at_10": 0.9060254355346823,
+        "ndcg_at_10": 0.8687949224876582,
         "cliff_hit": false,
-        "elapsed_ms": 164.1774969175458
+        "elapsed_ms": 451.89206302165985
       },
       {
         "query_id": "t-ambig-2",
@@ -481,17 +507,17 @@
         "owner": "tommy",
         "variant": "none",
         "top_k_names": [
-          "常宇亮",
-          "熊博",
           "陈旭东",
           "关中旗",
-          "顾励"
+          "顾励",
+          "宋哲君",
+          "李想"
         ],
-        "recall_at_5": 0.3333333333333333,
-        "mrr": 1.0,
-        "ndcg_at_10": 0.46927872602275644,
+        "recall_at_5": 0.0,
+        "mrr": 0.0,
+        "ndcg_at_10": 0.0,
         "cliff_hit": false,
-        "elapsed_ms": 244.7929810732603
+        "elapsed_ms": 239.84088096767664
       },
       {
         "query_id": "t-longt-1",
@@ -503,7 +529,7 @@
         "mrr": 0.0,
         "ndcg_at_10": 0.0,
         "cliff_hit": false,
-        "elapsed_ms": 241.47760588675737
+        "elapsed_ms": 150.82921274006367
       },
       {
         "query_id": "t-longt-2",
@@ -519,7 +545,7 @@
         "mrr": 0.5,
         "ndcg_at_10": 0.6934264036172708,
         "cliff_hit": false,
-        "elapsed_ms": 216.23587980866432
+        "elapsed_ms": 178.78198809921741
       },
       {
         "query_id": "t-longt-3",
@@ -533,11 +559,11 @@
           "陈京涛",
           "刘俊峤"
         ],
-        "recall_at_5": 1.0,
-        "mrr": 0.2,
-        "ndcg_at_10": 0.38685280723454163,
+        "recall_at_5": 0.42857142857142855,
+        "mrr": 1.0,
+        "ndcg_at_10": 0.4995958068998837,
         "cliff_hit": false,
-        "elapsed_ms": 339.4142361357808
+        "elapsed_ms": 155.2384067326784
       },
       {
         "query_id": "t-onehop-1",
@@ -545,35 +571,29 @@
         "owner": "tommy",
         "variant": "none",
         "top_k_names": [
-          "朱越凡",
           "陈旭东",
           "李洋",
           "吉君",
-          "宋哲君"
+          "宋哲君",
+          "何彦林"
         ],
-        "recall_at_5": 0.5,
-        "mrr": 1.0,
-        "ndcg_at_10": 0.6131471927654584,
+        "recall_at_5": 0.0,
+        "mrr": 0.0,
+        "ndcg_at_10": 0.0,
         "cliff_hit": false,
-        "elapsed_ms": 159.36190355569124
+        "elapsed_ms": 182.72659368813038
       },
       {
         "query_id": "t-onehop-2",
         "category": "one-hop",
         "owner": "tommy",
         "variant": "none",
-        "top_k_names": [
-          "李想",
-          "林国国",
-          "索喆",
-          "赵思思",
-          "李嘉祺"
-        ],
+        "top_k_names": [],
         "recall_at_5": 0.0,
         "mrr": 0.0,
         "ndcg_at_10": 0.0,
         "cliff_hit": false,
-        "elapsed_ms": 183.53090435266495
+        "elapsed_ms": 252.69935186952353
       }
     ],
     "llm": [
@@ -584,16 +604,16 @@
         "variant": "llm",
         "top_k_names": [
           "王一平",
-          "李靖",
-          "陈海明",
           "建国哥",
-          "纪少敏"
+          "纪少敏",
+          "李靖",
+          "陈海明"
         ],
-        "recall_at_5": 0.6666666666666666,
-        "mrr": 0.5,
-        "ndcg_at_10": 0.49818925746641285,
+        "recall_at_5": 1.0,
+        "mrr": 1.0,
+        "ndcg_at_10": 0.9674679834891693,
         "cliff_hit": false,
-        "elapsed_ms": 48222.22181968391
+        "elapsed_ms": 33600.763296708465
       },
       {
         "query_id": "r-rolecliff-2",
@@ -608,7 +628,7 @@
         "mrr": 1.0,
         "ndcg_at_10": 1.0,
         "cliff_hit": true,
-        "elapsed_ms": 5126.712303608656
+        "elapsed_ms": 4746.128401719034
       },
       {
         "query_id": "r-rolecliff-3",
@@ -624,7 +644,7 @@
         "mrr": 1.0,
         "ndcg_at_10": 1.0,
         "cliff_hit": false,
-        "elapsed_ms": 6152.317547239363
+        "elapsed_ms": 6089.453928172588
       },
       {
         "query_id": "r-ambig-1",
@@ -636,7 +656,7 @@
         "mrr": 0.0,
         "ndcg_at_10": 0.0,
         "cliff_hit": false,
-        "elapsed_ms": 324.67211224138737
+        "elapsed_ms": 294.4906149059534
       },
       {
         "query_id": "r-ambig-2",
@@ -650,11 +670,11 @@
           "胡77",
           "李靖"
         ],
-        "recall_at_5": 0.6666666666666666,
-        "mrr": 0.25,
-        "ndcg_at_10": 0.38364913903790027,
+        "recall_at_5": 0.6,
+        "mrr": 1.0,
+        "ndcg_at_10": 0.6164336326286644,
         "cliff_hit": false,
-        "elapsed_ms": 23228.042068891227
+        "elapsed_ms": 26701.44559070468
       },
       {
         "query_id": "r-longt-1",
@@ -663,13 +683,16 @@
         "variant": "llm",
         "top_k_names": [
           "胡77",
-          "俞汉清"
+          "李靖",
+          "王毓",
+          "沈长征",
+          "阿杜"
         ],
         "recall_at_5": 1.0,
         "mrr": 1.0,
         "ndcg_at_10": 1.0,
         "cliff_hit": false,
-        "elapsed_ms": 5957.456659525633
+        "elapsed_ms": 16354.24245428294
       },
       {
         "query_id": "r-longt-2",
@@ -687,7 +710,7 @@
         "mrr": 1.0,
         "ndcg_at_10": 1.0,
         "cliff_hit": false,
-        "elapsed_ms": 10562.616864219308
+        "elapsed_ms": 9599.986587651074
       },
       {
         "query_id": "r-longt-3",
@@ -696,16 +719,16 @@
         "variant": "llm",
         "top_k_names": [
           "阿杜",
-          "杜海勇",
-          "建国哥",
-          "纪少敏",
-          "王一平"
+          "胡斌",
+          "梁杏",
+          "大钊",
+          "杜海勇"
         ],
-        "recall_at_5": 0.3333333333333333,
-        "mrr": 1.0,
-        "ndcg_at_10": 0.46927872602275644,
+        "recall_at_5": 0.2,
+        "mrr": 0.25,
+        "ndcg_at_10": 0.14606834984270645,
         "cliff_hit": false,
-        "elapsed_ms": 43668.6207735911
+        "elapsed_ms": 43489.22022804618
       },
       {
         "query_id": "r-onehop-1",
@@ -717,7 +740,7 @@
         "mrr": 0.0,
         "ndcg_at_10": 0.0,
         "cliff_hit": false,
-        "elapsed_ms": 234.47409085929394
+        "elapsed_ms": 244.07118652015924
       },
       {
         "query_id": "r-onehop-2",
@@ -731,11 +754,11 @@
           "杜海勇",
           "崔宁"
         ],
-        "recall_at_5": 0.6666666666666666,
+        "recall_at_5": 0.75,
         "mrr": 1.0,
-        "ndcg_at_10": 0.7039180890341347,
+        "ndcg_at_10": 0.8318724637288826,
         "cliff_hit": false,
-        "elapsed_ms": 33227.92213503271
+        "elapsed_ms": 42272.297146730125
       },
       {
         "query_id": "t-rolecliff-1",
@@ -746,14 +769,14 @@
           "但斌",
           "李华",
           "遇言",
-          "秦轶轩",
-          "陈旭东"
+          "陈旭东",
+          "朱越凡"
         ],
-        "recall_at_5": 0.3333333333333333,
+        "recall_at_5": 0.25,
         "mrr": 1.0,
-        "ndcg_at_10": 0.46927872602275644,
-        "cliff_hit": false,
-        "elapsed_ms": 56193.63192375749
+        "ndcg_at_10": 0.3903800499921017,
+        "cliff_hit": true,
+        "elapsed_ms": 53509.24250576645
       },
       {
         "query_id": "t-rolecliff-2",
@@ -771,7 +794,7 @@
         "mrr": 1.0,
         "ndcg_at_10": 0.7653606369886217,
         "cliff_hit": true,
-        "elapsed_ms": 22007.14938621968
+        "elapsed_ms": 19935.74622552842
       },
       {
         "query_id": "t-rolecliff-3",
@@ -781,15 +804,15 @@
         "top_k_names": [
           "邱捷铭",
           "易卫东",
-          "李嘉祺",
-          "徐楷",
-          "赵凯"
+          "顾励",
+          "胡伟华",
+          "徐楷"
         ],
         "recall_at_5": 1.0,
         "mrr": 1.0,
         "ndcg_at_10": 1.0,
         "cliff_hit": false,
-        "elapsed_ms": 38697.88446556777
+        "elapsed_ms": 40235.61510629952
       },
       {
         "query_id": "t-ambig-1",
@@ -799,15 +822,15 @@
         "top_k_names": [
           "刘辛蕊",
           "于斌",
-          "黄博润",
           "晁亚新",
+          "黄博润",
           "徐文伟"
         ],
         "recall_at_5": 1.0,
         "mrr": 1.0,
         "ndcg_at_10": 1.0,
         "cliff_hit": false,
-        "elapsed_ms": 12224.793893285096
+        "elapsed_ms": 13224.20578636229
       },
       {
         "query_id": "t-ambig-2",
@@ -815,17 +838,17 @@
         "owner": "tommy",
         "variant": "llm",
         "top_k_names": [
-          "常宇亮",
           "陈数",
-          "熊博",
+          "赵燕佳",
+          "朱越凡",
           "王南浩",
-          "朱越凡"
+          "宋哲君"
         ],
-        "recall_at_5": 0.3333333333333333,
-        "mrr": 1.0,
-        "ndcg_at_10": 0.46927872602275644,
+        "recall_at_5": 0.0,
+        "mrr": 0.0,
+        "ndcg_at_10": 0.0,
         "cliff_hit": false,
-        "elapsed_ms": 47446.222838014364
+        "elapsed_ms": 50313.49057331681
       },
       {
         "query_id": "t-longt-1",
@@ -837,7 +860,7 @@
         "mrr": 0.0,
         "ndcg_at_10": 0.0,
         "cliff_hit": false,
-        "elapsed_ms": 257.6172724366188
+        "elapsed_ms": 244.46745589375496
       },
       {
         "query_id": "t-longt-2",
@@ -853,7 +876,7 @@
         "mrr": 1.0,
         "ndcg_at_10": 1.0,
         "cliff_hit": false,
-        "elapsed_ms": 5282.751675695181
+        "elapsed_ms": 6902.767850086093
       },
       {
         "query_id": "t-longt-3",
@@ -867,11 +890,11 @@
           "刘俊峤",
           "马莉"
         ],
-        "recall_at_5": 1.0,
-        "mrr": 0.25,
-        "ndcg_at_10": 0.43067655807339306,
+        "recall_at_5": 0.5714285714285714,
+        "mrr": 1.0,
+        "ndcg_at_10": 0.637033973357029,
         "cliff_hit": false,
-        "elapsed_ms": 28935.12516003102
+        "elapsed_ms": 26429.836539551616
       },
       {
         "query_id": "t-onehop-1",
@@ -882,51 +905,45 @@
           "朱越凡",
           "付雷",
           "罗钢青",
-          "尹强",
-          "尤天洋"
+          "尤天洋",
+          "尹强"
         ],
         "recall_at_5": 1.0,
         "mrr": 1.0,
-        "ndcg_at_10": 1.0,
+        "ndcg_at_10": 0.9828920819566879,
         "cliff_hit": false,
-        "elapsed_ms": 49063.79015836865
+        "elapsed_ms": 45727.49500721693
       },
       {
         "query_id": "t-onehop-2",
         "category": "one-hop",
         "owner": "tommy",
         "variant": "llm",
-        "top_k_names": [
-          "李想",
-          "赵思思",
-          "李嘉祺",
-          "索喆",
-          "林国国"
-        ],
+        "top_k_names": [],
         "recall_at_5": 0.0,
         "mrr": 0.0,
         "ndcg_at_10": 0.0,
         "cliff_hit": false,
-        "elapsed_ms": 11561.949684284627
+        "elapsed_ms": 305.3191592916846
       }
     ]
   },
   "summary": {
     "none": {
       "n": 20,
-      "recall_at_5": 0.625,
-      "mrr": 0.5683333333333334,
-      "ndcg_at_10": 0.5303811697684014,
+      "recall_at_5": 0.4847619047619047,
+      "mrr": 0.4791666666666667,
+      "ndcg_at_10": 0.4211699148153447,
       "cliff_avoidance_rate": 0.85,
-      "avg_latency_ms": 265.5319653917104
+      "avg_latency_ms": 205.49748470075428
     },
     "llm": {
       "n": 20,
-      "recall_at_5": 0.6333333333333333,
-      "mrr": 0.7,
-      "ndcg_at_10": 0.6094814929334367,
-      "cliff_avoidance_rate": 0.9,
-      "avg_latency_ms": 22418.798641627654
+      "recall_at_5": 0.6019047619047619,
+      "mrr": 0.7125,
+      "ndcg_at_10": 0.6168754585991931,
+      "cliff_avoidance_rate": 0.85,
+      "avg_latency_ms": 22011.01428223774
     }
   }
 }
