@@ -46,6 +46,10 @@ data/
 *.tmp
 .cache/
 
+# Product doc images — only named assets (e.g. 00_overview_main.png) are tracked
+docs/imgs/_tmp_*.png
+docs/imgs/page-*.png
+
 # IDE / OS
 .vscode/
 .idea/
