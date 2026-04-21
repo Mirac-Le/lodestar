@@ -4,10 +4,10 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1">
   <title>Lodestar — Personal Network Navigator</title>
-  <link rel="stylesheet" href="/static/style.css?v=20260420-owner-tabs-above-modal">
+  <link rel="stylesheet" href="/static/style.css?v=20260422-l2-todo">
   <script src="/static/cytoscape.min.js"></script>
   <script src="/static/echarts.min.js"></script>
-  <script defer src="/static/app.js?v=20260420-owner-tabs-above-modal"></script>
+  <script defer src="/static/app.js?v=20260422-l2-todo"></script>
   <script defer src="/static/alpine.min.js"></script>
 </head>
 <body x-data="appState()" x-init="init()" :class="searching ? 'searching' : ''">
@@ -811,8 +811,9 @@
                     <span class="rel-name" x-text="p.b_name"></span>
                     <template x-if="p.existing_edge">
                       <span class="rel-existing-tag"
-                            :title="`覆盖现有 ${p.existing_edge.source} 边 strength=${p.existing_edge.strength}`">
-                        覆盖 <span x-text="p.existing_edge.source"></span> ·
+                            :class="`src-${p.existing_edge.source}`"
+                            :title="`覆盖现有 ${relationSourceLabel(p.existing_edge.source)} 边 strength=${p.existing_edge.strength}`">
+                        覆盖 <span x-text="relationSourceLabel(p.existing_edge.source)"></span> ·
                         现 <span x-text="p.existing_edge.strength"></span>
                       </span>
                     </template>
@@ -941,12 +942,20 @@
           </label>
         </div>
         <div class="chip-row" style="margin-top: 6px;">
-          <template x-for="src in ['manual','colleague_inferred','ai_inferred']" :key="src">
+          <template x-for="src in ['manual','colleague_inferred']" :key="src">
             <span class="chip"
-                  :class="relationsFilter.sources.includes(src) ? 'active' : ''"
-                  @click="toggleRelationSourceFilter(src)"
-                  x-text="relationSourceLabel(src)"></span>
+                  :class="`src-${src} ${relationsFilter.sources.includes(src) ? 'active' : ''}`"
+                  @click="toggleRelationSourceFilter(src)">
+              <span class="swatch"></span>
+              <span x-text="relationSourceLabel(src)"></span>
+            </span>
           </template>
+          <span class="chip src-ai_inferred is-disabled"
+                title="L2 关系抽取尚未实现：将来从 bio/notes 自动抽 P↔P 关系，落 source=ai_inferred">
+            <span class="swatch"></span>
+            <span>AI 推断</span>
+            <span class="chip-todo">TODO</span>
+          </span>
         </div>
       </div>
 
@@ -975,8 +984,10 @@
                         :class="`s${r.strength}`"
                         x-text="r.strength"></span>
                   <span class="rel-source-pill"
-                        :class="`src-${r.source}`"
-                        x-text="relationSourceLabel(r.source)"></span>
+                        :class="`src-${r.source}`">
+                    <span class="swatch"></span>
+                    <span x-text="relationSourceLabel(r.source)"></span>
+                  </span>
                 </div>
                 <template x-if="r.context">
                   <div class="rel-list-context" x-text="r.context"></div>
