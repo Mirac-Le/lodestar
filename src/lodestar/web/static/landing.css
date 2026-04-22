@@ -1,0 +1,316 @@
+/* ============================================================
+   Lodestar — landing (mount picker) page
+   只在 root URL `/` 多 mount 场景渲染；与主 SPA 共用 style.css
+   的设计 token，但布局/层级是独立的：没有 cytoscape/echarts，
+   不抢主 SPA 的 z-index 与 overflow 规则。
+   ============================================================ */
+
+html, body.landing-body {
+  /* 主 SPA 整页 overflow:hidden，landing 反过来允许垂直滚动，
+     避免极小窗口下卡片被切。 */
+  overflow: auto;
+  min-height: 100%;
+}
+
+body.landing-body {
+  background:
+    radial-gradient(1200px 600px at 20% -10%, rgba(255,255,255,0.04), transparent 60%),
+    radial-gradient(900px 500px at 110% 110%, rgba(255,255,255,0.025), transparent 55%),
+    var(--bg-base);
+}
+
+.landing-shell {
+  max-width: 880px;
+  margin: 0 auto;
+  padding: 88px 32px 56px;
+  display: flex;
+  flex-direction: column;
+  gap: 56px;
+}
+
+/* -------------------------------------- hero */
+
+.landing-hero {
+  display: flex;
+  flex-direction: column;
+  gap: 22px;
+}
+
+/* 标题两行在左、插图紧挨在右，垂直居中对齐文案 */
+.landing-hero-row {
+  display: flex;
+  flex-direction: row;
+  align-items: center;
+  justify-content: flex-start;
+  gap: 24px;
+}
+
+.landing-hero-copy {
+  /* 不撑满，按内容宽收缩；副标顶到自然换行宽度即可 */
+  flex: 0 1 auto;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+.landing-hero-copy .landing-sub {
+  /* 给副标一个上限，避免它一行拉得过长把图推到很远 */
+  max-width: 38ch;
+}
+
+.landing-mark {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  color: var(--text);
+  opacity: 0.94;
+}
+.landing-mark svg {
+  color: var(--text);
+  opacity: 0.85;
+}
+.landing-mark-name {
+  font-size: 15px;
+  font-weight: 600;
+  letter-spacing: -0.01em;
+}
+
+/* hero illustration: 右栏，与左侧标题+副标题垂直居中 */
+.landing-art {
+  flex: 0 0 auto;
+  margin: 0;
+  padding: 0;
+  width: 320px;
+  max-width: 46vw;
+  display: flex;
+  justify-content: flex-end;
+  align-items: center;
+  pointer-events: none;
+  user-select: none;
+}
+.landing-art img {
+  width: 100%;
+  height: auto;
+  display: block;
+  opacity: 0.88;
+}
+
+.landing-title {
+  margin: 0;
+  font-size: 38px;
+  font-weight: 600;
+  letter-spacing: -0.025em;
+  line-height: 1.15;
+  color: var(--text);
+}
+
+.landing-sub {
+  margin: 0;
+  max-width: none;
+  font-size: 15px;
+  line-height: 1.65;
+  color: var(--text-secondary);
+}
+
+@media (max-width: 640px) {
+  .landing-hero-row {
+    flex-direction: column;
+    align-items: stretch;
+    gap: 20px;
+  }
+  .landing-art {
+    order: 1;
+    width: 100%;
+    max-width: none;
+    justify-content: center;
+  }
+  .landing-art img {
+    width: min(240px, 60vw);
+    margin: 0 auto;
+  }
+}
+
+/* -------------------------------------- section header */
+
+.landing-section {
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+}
+
+.landing-section-label {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 12px;
+  text-transform: uppercase;
+  letter-spacing: 0.12em;
+  color: var(--text-muted);
+}
+.landing-section-label .dot { color: var(--text-faint); }
+.landing-section-label .muted { color: var(--text-muted); text-transform: none; letter-spacing: 0; }
+
+.landing-empty {
+  padding: 28px 24px;
+  border: 1px dashed var(--border);
+  border-radius: 10px;
+  color: var(--text-muted);
+  background: var(--bg-overlay);
+  font-size: 14px;
+}
+.landing-empty.error {
+  color: var(--danger);
+  border-color: rgba(193, 122, 116, 0.32);
+  background: rgba(193, 122, 116, 0.06);
+}
+.landing-empty code {
+  color: var(--text-secondary);
+  background: var(--bg-overlay-2);
+  padding: 1px 6px;
+  border-radius: 4px;
+}
+
+/* -------------------------------------- mount cards grid */
+
+.mount-grid {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
+  gap: 14px;
+}
+
+.mount-card {
+  --card-accent: var(--accent);
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  padding: 22px 22px 18px;
+  background: var(--bg-elevated);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  cursor: pointer;
+  transition:
+    transform 140ms ease,
+    border-color 160ms ease,
+    background 160ms ease,
+    box-shadow 200ms ease;
+  outline: none;
+}
+.mount-card::before {
+  /* very thin accent strip top-left → top-right; muted by default,
+     comes from optional accent_color so users can color their tabs. */
+  content: "";
+  position: absolute;
+  inset: 0 0 auto 0;
+  height: 2px;
+  background: var(--card-accent);
+  opacity: 0.32;
+  border-top-left-radius: 12px;
+  border-top-right-radius: 12px;
+  transition: opacity 160ms ease;
+}
+.mount-card:hover,
+.mount-card:focus-visible {
+  transform: translateY(-1px);
+  border-color: var(--border-strong);
+  background: var(--bg-raised);
+  box-shadow: var(--shadow-md);
+}
+.mount-card:hover::before,
+.mount-card:focus-visible::before { opacity: 0.7; }
+.mount-card:focus-visible {
+  box-shadow:
+    var(--shadow-md),
+    0 0 0 1px var(--border-focus);
+}
+
+.mount-card-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.mount-card-head { justify-content: space-between; }
+.mount-card-name {
+  margin: 0;
+  font-size: 18px;
+  font-weight: 600;
+  letter-spacing: -0.012em;
+  color: var(--text);
+  /* leave room for the lock icon on long names */
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.mount-card-lock {
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px; height: 22px;
+  border-radius: 6px;
+  color: var(--text-muted);
+  background: var(--bg-overlay);
+  border: 1px solid var(--border);
+}
+.mount-card.is-locked:hover .mount-card-lock {
+  color: var(--text-secondary);
+  border-color: var(--border-strong);
+}
+
+.mount-card-meta {
+  font-size: 13px;
+  color: var(--text-secondary);
+}
+.mount-card-meta .num {
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--text);
+}
+.mount-card-meta .muted { color: var(--text-muted); }
+.mount-card-meta .dot { color: var(--text-faint); }
+
+.mount-card-foot {
+  justify-content: space-between;
+  padding-top: 12px;
+  border-top: 1px solid var(--border);
+}
+.mount-card-foot .path {
+  font-size: 12px;
+  color: var(--text-muted);
+}
+.mount-card-arrow {
+  color: var(--text-muted);
+  transition: transform 160ms ease, color 160ms ease;
+}
+.mount-card:hover .mount-card-arrow,
+.mount-card:focus-visible .mount-card-arrow {
+  color: var(--text);
+  transform: translateX(2px);
+}
+
+/* -------------------------------------- footer */
+
+.landing-foot {
+  margin-top: 8px;
+  padding-top: 24px;
+  border-top: 1px solid var(--border);
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 12.5px;
+  color: var(--text-muted);
+}
+.landing-foot .muted { color: var(--text-faint); }
+.landing-foot .dot { color: var(--text-faint); }
+
+@media (max-width: 520px) {
+  .landing-shell { padding: 56px 18px 40px; gap: 40px; }
+  .landing-title { font-size: 30px; }
+  .landing-sub { font-size: 14px; }
+}

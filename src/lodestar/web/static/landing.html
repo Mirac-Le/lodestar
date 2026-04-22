@@ -1,0 +1,139 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1">
+  <title>Lodestar — 选择网络</title>
+  <link rel="stylesheet" href="/static/style.css?v=20260423-landing8">
+  <link rel="stylesheet" href="/static/landing.css?v=20260423-landing8">
+  <script defer src="/static/alpine.min.js"></script>
+</head>
+<body class="landing-body" x-data="landing()" x-init="load()">
+
+  <main class="landing-shell">
+
+    <header class="landing-hero">
+      <div class="landing-mark">
+        <svg viewBox="0 0 24 24" width="22" height="22" fill="none"
+             stroke="currentColor" stroke-width="1.6"
+             stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+          <path d="M12 2 L14.5 9 L22 12 L14.5 15 L12 22 L9.5 15 L2 12 L9.5 9 Z"/>
+        </svg>
+        <span class="landing-mark-name">Lodestar</span>
+      </div>
+
+      <div class="landing-hero-row">
+        <div class="landing-hero-copy">
+          <h1 class="landing-title">找一条最近的路。</h1>
+          <p class="landing-sub">
+            在你的关系网里，看见谁能把你带到那里。
+          </p>
+        </div>
+        <figure class="landing-art" aria-hidden="true">
+          <img src="/static/landing-hero.png?v=20260423-landing5"
+               alt=""
+               loading="eager"
+               decoding="async">
+        </figure>
+      </div>
+    </header>
+
+    <section class="landing-section">
+      <div class="landing-section-label">
+        <span>你的网络</span>
+        <span class="dot" x-show="!loading && !error">·</span>
+        <span class="muted" x-show="!loading && !error" x-text="mounts.length + ' 个'"></span>
+      </div>
+
+      <template x-if="loading">
+        <div class="landing-empty">正在打开…</div>
+      </template>
+
+      <template x-if="!loading && error">
+        <div class="landing-empty error" x-text="error"></div>
+      </template>
+
+      <template x-if="!loading && !error && mounts.length === 0">
+        <div class="landing-empty">
+          还没有可用的网络。用 <code class="mono">lodestar serve --mount</code> 挂载一个再回来。
+        </div>
+      </template>
+
+      <ul class="mount-grid" x-show="!loading && !error && mounts.length > 0">
+        <template x-for="m in mounts" :key="m.slug">
+          <li class="mount-card"
+              :class="{ 'is-locked': m.locked }"
+              :style="m.accent_color ? '--card-accent:' + m.accent_color : ''"
+              @click="enter(m.slug)"
+              @keydown.enter="enter(m.slug)"
+              tabindex="0"
+              role="link"
+              :aria-label="'进入网络 ' + m.display_name">
+
+            <div class="mount-card-row mount-card-head">
+              <h2 class="mount-card-name" x-text="m.display_name"></h2>
+              <span class="mount-card-lock" x-show="m.locked" title="此网络已加锁">
+                <svg width="13" height="13" viewBox="0 0 24 24" fill="none"
+                     stroke="currentColor" stroke-width="1.8"
+                     stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                  <rect x="4" y="11" width="16" height="10" rx="2"/>
+                  <path d="M8 11V7a4 4 0 0 1 8 0v4"/>
+                </svg>
+              </span>
+            </div>
+
+            <div class="mount-card-row mount-card-meta">
+              <span class="mono num" x-text="m.contact_count"></span>
+              <span class="muted">contacts</span>
+            </div>
+
+            <div class="mount-card-row mount-card-foot">
+              <span class="mono path" x-text="'/r/' + m.slug + '/'"></span>
+              <span class="mount-card-arrow" aria-hidden="true">
+                <svg width="14" height="14" viewBox="0 0 16 16" fill="none"
+                     stroke="currentColor" stroke-width="1.6"
+                     stroke-linecap="round" stroke-linejoin="round">
+                  <path d="M3 8 H13 M9 4 L13 8 L9 12"/>
+                </svg>
+              </span>
+            </div>
+
+          </li>
+        </template>
+      </ul>
+    </section>
+
+    <footer class="landing-foot">
+      <span>每个网络相互独立</span>
+      <span class="dot">·</span>
+      <span>切换时需要重新解锁</span>
+    </footer>
+
+  </main>
+
+  <script>
+    function landing() {
+      return {
+        mounts: [],
+        loading: true,
+        error: null,
+        async load() {
+          try {
+            const r = await fetch('/api/mounts');
+            if (!r.ok) throw new Error('HTTP ' + r.status);
+            const j = await r.json();
+            this.mounts = j.mounts || [];
+          } catch (e) {
+            this.error = '加载失败：' + (e.message || e);
+          } finally {
+            this.loading = false;
+          }
+        },
+        enter(slug) {
+          window.location.href = '/r/' + slug + '/';
+        },
+      };
+    }
+  </script>
+</body>
+</html>

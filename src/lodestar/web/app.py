@@ -1063,6 +1063,12 @@ def create_app() -> FastAPI:
         # and drop the user straight into the only network they have.
         if len(mount_meta) == 1:
             return RedirectResponse(f"/r/{mount_meta[0].slug}/")
+        # Multi-mount: dedicated lightweight picker page (no cytoscape /
+        # echarts / 1.8k-line SPA loaded). Falls back to the SPA shell
+        # only if landing.html is somehow missing.
+        landing = STATIC_DIR / "landing.html"
+        if landing.exists():
+            return FileResponse(landing)
         return FileResponse(STATIC_DIR / "index.html")
 
     return root
