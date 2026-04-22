@@ -380,7 +380,7 @@ Run whatever is appropriate after edits:
 
 ```bash
 uv run ruff check .
-uv run mypy src
+uv run ty check src
 ```
 
 Then check edited frontend files with IDE diagnostics.

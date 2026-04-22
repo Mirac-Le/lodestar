@@ -7,7 +7,7 @@
 1. **Personal-scale contacts database** with rich tagging (skills, industries, companies, cities, custom tags).
 2. **Goal-driven retrieval**: user enters `"I want to do X"`; we return the best people and the shortest/strongest path from `me` to each of them.
 3. **Zero external services**: must run fully locally with a single SQLite file. The only remote calls are to an OpenAI-compatible API for embeddings and goal parsing, and both are optional at query time.
-4. **Modern Python hygiene**: `uv`, Python 3.12, strict mypy, ruff, pytest.
+4. **Modern Python hygiene**: `uv`, Python 3.12, ruff, ty (Astral 类型检查器), pytest.
 
 ## Non-goals (for now)
 
