@@ -1,8 +1,8 @@
-"""In-process registry of background enrichment jobs.
+"""In-process registry of background enrichment jobs (one-db-per-mount).
 
 Why not Celery / RQ: the web app is single-process uvicorn and the
 expected fanout is "one user clicks 批量 AI 解析, waits a couple of
-minutes". A `ThreadPoolExecutor` + a dict guarded by a lock is more
+minutes". A worker thread per job + a dict guarded by a lock is more
 than enough and adds zero deployment moving parts.
 
 Each job:
@@ -11,8 +11,8 @@ Each job:
     request thread's `Repository` is not shareable across threads.
   * publishes progress to a `JobState` dataclass that the polling
     `GET /api/enrich/status/{task_id}` endpoint reads.
-  * is owner-keyed: a second start while one is still RUNNING for the
-    same owner returns the existing task_id rather than spawning a
+  * is mount-keyed: a second start while one is still RUNNING for the
+    same mount slug returns the existing task_id rather than spawning a
     parallel one (avoids racing the same rows twice).
 
 The job registry is process-local and not persisted; if the server
@@ -27,12 +27,12 @@ import threading
 import time
 import uuid
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Literal
 
 from lodestar.config import get_settings
 from lodestar.db import Repository, connect, init_schema
 from lodestar.enrich import L1Extractor, LLMClient, LLMError
-
 
 _log = logging.getLogger(__name__)
 
@@ -43,8 +43,8 @@ JobStatus = Literal["pending", "running", "done", "error"]
 @dataclass
 class JobState:
     task_id: str
-    owner_id: int
-    owner_slug: str
+    mount_slug: str
+    db_path: str
     status: JobStatus = "pending"
     only_missing: bool = True
     total: int = 0
@@ -59,8 +59,7 @@ class JobState:
     def to_dict(self) -> dict[str, object]:
         return {
             "task_id": self.task_id,
-            "owner_id": self.owner_id,
-            "owner_slug": self.owner_slug,
+            "mount_slug": self.mount_slug,
             "status": self.status,
             "only_missing": self.only_missing,
             "total": self.total,
@@ -79,8 +78,8 @@ class JobState:
 
 _lock = threading.Lock()
 _jobs: dict[str, JobState] = {}
-# Owner-id → task_id of currently running (or pending) job, if any.
-_owner_running: dict[int, str] = {}
+# Mount slug → task_id of currently running (or pending) job, if any.
+_mount_running: dict[str, str] = {}
 
 
 def get(task_id: str) -> JobState | None:
@@ -95,33 +94,33 @@ def list_jobs() -> list[JobState]:
 
 def start(
     *,
-    owner_id: int,
-    owner_slug: str,
+    mount_slug: str,
+    db_path: str | Path,
     only_missing: bool = True,
 ) -> JobState:
-    """Start (or join) a background enrichment job for `owner_id`.
+    """Start (or join) a background enrichment job for ``mount_slug``.
 
-    Returns the JobState. If a job is already running for this owner,
+    Returns the JobState. If a job is already running for this mount,
     the existing JobState is returned untouched so the caller can poll
     the same task_id.
     """
+    db_path_str = str(db_path)
     with _lock:
-        existing_id = _owner_running.get(owner_id)
+        existing_id = _mount_running.get(mount_slug)
         if existing_id and (st := _jobs.get(existing_id)):
             if st.status in ("pending", "running"):
                 return st
-            # Stale entry — clear and proceed.
-            _owner_running.pop(owner_id, None)
+            _mount_running.pop(mount_slug, None)
 
         task_id = uuid.uuid4().hex[:12]
         state = JobState(
             task_id=task_id,
-            owner_id=owner_id,
-            owner_slug=owner_slug,
+            mount_slug=mount_slug,
+            db_path=db_path_str,
             only_missing=only_missing,
         )
         _jobs[task_id] = state
-        _owner_running[owner_id] = task_id
+        _mount_running[mount_slug] = task_id
 
     thread = threading.Thread(
         target=_run, args=(task_id,), name=f"enrich-{task_id}", daemon=True
@@ -136,11 +135,12 @@ def _run(task_id: str) -> None:
     if state is None:
         return
 
+    conn = None
     try:
         settings = get_settings()
         # Worker thread MUST own its connection — the request-scope
         # Repository is bound to a connection on the FastAPI thread pool.
-        conn = connect(settings.db_path)
+        conn = connect(Path(state.db_path))
         init_schema(conn, embedding_dim=settings.embedding_dim)
         repo = Repository(conn)
 
@@ -150,8 +150,8 @@ def _run(task_id: str) -> None:
             _finish(state, status="error", error_message=str(exc))
             return
 
-        extractor = L1Extractor(repo, owner_id=state.owner_id, client=client)
-        people = repo.list_people(owner_id=state.owner_id)
+        extractor = L1Extractor(repo, client=client)
+        people = repo.list_people()
         with _lock:
             state.total = len(people)
             state.status = "running"
@@ -176,19 +176,22 @@ def _run(task_id: str) -> None:
         _log.exception("enrich job %s failed", task_id)
         _finish(state, status="error", error_message=str(exc))
     finally:
-        try:
-            conn.close()  # type: ignore[possibly-undefined]
-        except Exception:
-            pass
+        if conn is not None:
+            try:
+                conn.close()
+            except Exception:
+                pass
 
 
-def _finish(state: JobState, *, status: JobStatus, error_message: str | None = None) -> None:
+def _finish(
+    state: JobState, *, status: JobStatus, error_message: str | None = None
+) -> None:
     with _lock:
         state.status = status
         state.finished_at = time.time()
         if error_message:
             state.error_message = error_message
-        # Clear owner-running ONLY if it still points at us (defensive
+        # Clear mount-running ONLY if it still points at us (defensive
         # against race with a re-trigger that already kicked us out).
-        if _owner_running.get(state.owner_id) == state.task_id:
-            _owner_running.pop(state.owner_id, None)
+        if _mount_running.get(state.mount_slug) == state.task_id:
+            _mount_running.pop(state.mount_slug, None)

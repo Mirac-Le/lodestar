@@ -1,7 +1,13 @@
-"""Typer-powered CLI."""
+"""Typer-powered CLI.
+
+一人一库（v4）：所有命令都只面对**一个 db 文件**。无 ``--owner``，无 owner
+子命令；用全局 ``--db`` 切换数据库（或 ``LODESTAR_DB_PATH`` 环境变量）。
+多人共用同一进程在 web 层用 ``serve --mount slug=path``，CLI 层不混合。
+"""
 
 from __future__ import annotations
 
+import os
 from getpass import getpass
 from pathlib import Path
 from typing import Annotated
@@ -11,7 +17,7 @@ from rich.console import Console
 from rich.prompt import Confirm, IntPrompt, Prompt
 from rich.table import Table
 
-from lodestar.config import get_settings
+from lodestar.config import get_settings, reset_settings
 from lodestar.db import Repository, connect, init_schema
 from lodestar.embedding import get_embedding_client
 from lodestar.importers import CSVImporter, ExcelImporter
@@ -30,6 +36,25 @@ app = typer.Typer(
 console = Console()
 
 
+@app.callback()
+def _global_options(
+    db: Annotated[
+        Path | None,
+        typer.Option(
+            "--db",
+            help="Path to the SQLite db file. Overrides LODESTAR_DB_PATH / default.",
+            envvar="LODESTAR_DB_PATH",
+        ),
+    ] = None,
+) -> None:
+    """Global flags applied to every subcommand."""
+    if db is not None:
+        # Settings is a module-level singleton; reset so the new --db wins
+        # over any cached value from earlier process state (e.g. pytest).
+        os.environ["LODESTAR_DB_PATH"] = str(db)
+        reset_settings()
+
+
 def _open_repo() -> tuple[Repository, int]:
     settings = get_settings()
     conn = connect(settings.db_path)
@@ -37,142 +62,72 @@ def _open_repo() -> tuple[Repository, int]:
     return Repository(conn), settings.embedding_dim
 
 
-def _resolve_owner(repo: Repository, slug: str | None):
-    """统一的 owner 解析：单 owner 库自动选；多 owner 必须显式 --owner。
-
-    返回 ``Owner`` 对象（已校验 slug 存在）。失败时直接 ``typer.Exit``。
-    多 owner 时不让算法静默走"第一个 owner"，否则 search/path 会跑在
-    错误网络里——CLI 用户也是人，不应该比 web 端少这一层防护。
-    """
-    owners = repo.list_owners()
-    if not owners:
-        console.print("[red]No owners exist. Run `lodestar init` first.[/red]")
-        raise typer.Exit(code=1)
-    if slug is None:
-        if len(owners) == 1:
-            return owners[0]
-        console.print(
-            f"[red]Multiple owners exist; pass --owner one of: "
-            f"{', '.join(o.slug for o in owners)}.[/red]"
-        )
-        raise typer.Exit(code=1)
-    owner_obj = repo.get_owner_by_slug(slug)
-    if owner_obj is None:
-        console.print(
-            f"[red]Owner [cyan]{slug}[/cyan] not found. Existing: "
-            f"{', '.join(o.slug for o in owners)}.[/red]"
-        )
-        raise typer.Exit(code=1)
-    return owner_obj
-
-
 # --------------------------------------------------------------------- init
 @app.command()
 def init(
     name: Annotated[str | None, typer.Option(help="Your display name.")] = None,
     bio: Annotated[str | None, typer.Option(help="Short self-description.")] = None,
-    slug: Annotated[
-        str, typer.Option(help="Owner slug (URL-safe). Defaults to 'me'.")
-    ] = "me",
+    color: Annotated[
+        str | None,
+        typer.Option(
+            "--color",
+            help="Accent hex color shown in the web tab, e.g. '#7a8b9c'. Optional.",
+        ),
+    ] = None,
 ) -> None:
-    """Initialize the database and create the first owner.
+    """Initialize this database file and create the singleton ``me`` person.
 
-    Multiple owners can coexist (Richard / Tommy / ...). Use
-    `lodestar owner add` to register additional owners after init.
+    一人一库：每个 db 文件只有一位 owner（``person.is_me=1``，UNIQUE 约束）。
+    要给别人也加一个网络，新建另一个 db 路径再 ``lodestar --db <path> init``。
     """
     repo, _ = _open_repo()
-    existing = repo.get_owner_by_slug(slug)
-    if existing:
+    existing = repo.get_me()
+    if existing is not None:
         console.print(
-            f"[yellow]Owner [cyan]{slug}[/cyan] already initialised as "
-            f"[cyan]{existing.display_name}[/cyan].[/yellow]"
+            f"[yellow]Already initialised as [cyan]{existing.name}[/cyan] "
+            f"at [dim]{get_settings().db_path}[/dim].[/yellow]"
         )
         return
     if name is None:
         name = Prompt.ask("Display name")
-    owner = repo.ensure_owner(slug=slug, display_name=name, bio=bio)
-    console.print(
-        f"[green]Initialized.[/green] Database: [dim]{get_settings().db_path}[/dim]"
-    )
-    console.print(
-        f"[green]Owner:[/green] [cyan]{owner.display_name}[/cyan] "
-        f"(slug={owner.slug}, me_id={owner.me_person_id})"
-    )
+    me = repo.ensure_me(name=name, bio=bio)
+    if color:
+        repo.accent_color = color
+    console.print(f"[green]Initialized.[/green] Database: [dim]{get_settings().db_path}[/dim]")
+    console.print(f"[green]Me:[/green] [cyan]{me.name}[/cyan] (id={me.id})")
 
 
-# --------------------------------------------------------------- owner mgmt
-owner_app = typer.Typer(
-    name="owner",
-    help="Manage network owners (each gets their own `me` and subgraph).",
-    no_args_is_help=True,
-)
-app.add_typer(owner_app, name="owner")
-
-
-@owner_app.command("add")
-def owner_add(
-    slug: Annotated[str, typer.Argument(help="URL-safe slug, e.g. 'tommy'.")],
-    display: Annotated[str, typer.Option("--display", help="Display name shown in the UI.")],
-    bio: Annotated[str | None, typer.Option(help="Optional self-description for `me`.")] = None,
-    color: Annotated[
-        str | None, typer.Option(help="Optional accent hex color, e.g. '#7a8b9c'.")
-    ] = None,
-) -> None:
-    """Register a new owner (creates their `me` person row)."""
-    repo, _ = _open_repo()
-    if repo.get_owner_by_slug(slug):
-        console.print(f"[yellow]Owner [cyan]{slug}[/cyan] already exists.[/yellow]")
-        return
-    owner = repo.ensure_owner(
-        slug=slug, display_name=display, bio=bio, accent_color=color
-    )
-    console.print(
-        f"[green]Owner added:[/green] [cyan]{owner.display_name}[/cyan] "
-        f"(slug={owner.slug}, me_id={owner.me_person_id})"
-    )
-
-
-@owner_app.command("list")
-def owner_list() -> None:
-    """List all owners."""
-    repo, _ = _open_repo()
-    owners = repo.list_owners()
-    if not owners:
-        console.print("[dim]No owners yet. Run `lodestar init` to create one.[/dim]")
-        return
-    table = Table(title=f"Owners ({len(owners)})")
-    table.add_column("Slug", style="cyan")
-    table.add_column("Display name")
-    table.add_column("Me ID", justify="right")
-    table.add_column("Contacts", justify="right")
-    for o in owners:
-        n = len(repo.list_people(owner_id=o.id))
-        table.add_row(o.slug, o.display_name, str(o.me_person_id), str(n))
-    console.print(table)
-
-
-@owner_app.command("web-password")
-def owner_web_password(
-    slug: Annotated[str, typer.Argument(help="Owner slug, e.g. richard.")],
+# ---------------------------------------------------------- web-password
+@app.command("web-password")
+def web_password_cmd(
     new_password: Annotated[
         str | None,
         typer.Option("--set", help="New password (omit to type interactively)."),
     ] = None,
     clear: Annotated[
-        bool, typer.Option("--clear", help="Remove the web UI lock for this owner.")
+        bool,
+        typer.Option("--clear", help="Remove the web UI lock for this database."),
+    ] = False,
+    status: Annotated[
+        bool,
+        typer.Option("--status", help="Print whether a password is currently set."),
     ] = False,
 ) -> None:
-    """Set or clear the password for an owner's tab in the web UI (`serve`)."""
+    """Set / clear / inspect the web UI password for this db file.
+
+    Empty password = unlocked tab. Hash uses PBKDF2-HMAC-SHA256 with a fresh
+    16-byte salt; verification is constant-time.
+    """
     repo, _ = _open_repo()
-    owner = repo.get_owner_by_slug(slug)
-    if owner is None or owner.id is None:
-        console.print(f"[red]Owner '{slug}' not found.[/red]")
-        raise typer.Exit(1)
+    if status:
+        if repo.web_password_hash:
+            console.print(f"[green]Locked[/green] · {get_settings().db_path}")
+        else:
+            console.print(f"[yellow]Unlocked[/yellow] · {get_settings().db_path}")
+        return
     if clear:
-        repo.set_owner_web_password(owner.id, None)
-        console.print(
-            f"[green]Removed web lock for[/green] [cyan]{slug}[/cyan]."
-        )
+        repo.set_web_password(None)
+        console.print(f"[green]Removed web lock[/green] for {get_settings().db_path}.")
         return
     pw = new_password
     if not pw:
@@ -182,12 +137,10 @@ def owner_web_password(
             console.print("[red]Passwords do not match.[/red]")
             raise typer.Exit(1)
     if not pw:
-        console.print(
-            "[red]Empty password; use [bold]--clear[/bold] to remove lock.[/red]"
-        )
+        console.print("[red]Empty password; use [bold]--clear[/bold] to remove lock.[/red]")
         raise typer.Exit(1)
-    repo.set_owner_web_password(owner.id, pw)
-    console.print(f"[green]Web password set for[/green] [cyan]{slug}[/cyan].")
+    repo.set_web_password(pw)
+    console.print(f"[green]Web password set[/green] for {get_settings().db_path}.")
 
 
 # -------------------------------------------------------------------- reset
@@ -282,17 +235,9 @@ def find(
     no_llm: Annotated[
         bool, typer.Option("--no-llm", help="Skip LLM parsing; use raw goal as keywords.")
     ] = False,
-    owner: Annotated[
-        str | None,
-        typer.Option(
-            "--owner",
-            help="Owner slug (e.g. richard / tommy). Required when more than one owner exists.",
-        ),
-    ] = None,
 ) -> None:
     """Find the best people and paths for achieving a goal."""
     repo, _ = _open_repo()
-    owner_obj = _resolve_owner(repo, owner)
     settings = get_settings()
 
     if no_llm:
@@ -314,13 +259,13 @@ def find(
     except Exception:
         embedder = None
 
-    search = HybridSearch(repo=repo, embedder=embedder, owner_id=owner_obj.id)
-    candidates = search.search(
-        intent, top_k=settings.top_k, recall_k=settings.reranker_recall_k
-    )
+    search = HybridSearch(repo=repo, embedder=embedder)
+    candidates = search.search(intent, top_k=settings.top_k, recall_k=settings.reranker_recall_k)
 
     if not candidates:
-        console.print("[yellow]No candidates found. Try adding more contacts or a different goal.[/yellow]")
+        console.print(
+            "[yellow]No candidates found. Try adding more contacts or a different goal.[/yellow]"
+        )
         return
 
     reranker = build_reranker_from_settings()
@@ -329,7 +274,6 @@ def find(
     finder = PathFinder(
         repo=repo,
         max_hops=settings.max_hops,
-        owner_id=owner_obj.id,
         weak_me_floor=settings.weak_me_floor,
     )
     results = finder.rank(candidates)
@@ -403,87 +347,63 @@ def import_spreadsheet(
         ),
     ] = True,
     preset: Annotated[
-        str,
-        typer.Option(
-            help=(
-                "Column preset: 'extended' (default, reads 公司/城市/认识), "
-                "'richard' (Richard 的 8 列 richard_network.xlsx), or "
-                "'tommy' (Tommy 的 16 列 tommy_network.xlsx)."
-            ),
-        ),
-    ] = "extended",
-    owner: Annotated[
         str | None,
         typer.Option(
-            "--owner",
-            help="Owner slug to attribute these contacts to. Defaults to the first owner.",
+            help=(
+                "Column preset (xlsx 必填): "
+                "'richard' → richard_network.xlsx 这类 13 列通用表 "
+                "（template.xlsx / demo_network.xlsx 也用它）; "
+                "'tommy' → tommy 的 16 列机构合作画像表。"
+            ),
         ),
     ] = None,
 ) -> None:
-    """Bulk-import contacts. Format auto-detected by file extension."""
+    """Bulk-import contacts into the current db file. Format auto-detected."""
     from lodestar.importers import (
-        extended_network_preset,
-        richard_finance_preset,
+        richard_network_preset,
         tommy_contacts_preset,
     )
 
     preset_map = {
-        "extended": extended_network_preset,
-        "richard": richard_finance_preset,
+        "richard": richard_network_preset,
         "tommy": tommy_contacts_preset,
-        # Backwards-compatible alias for anyone still typing the old name.
-        # Safe to remove once nobody is on the v0.1 CLI anymore.
-        "finance": richard_finance_preset,
     }
 
     repo, _ = _open_repo()
 
-    # Resolve owner; we MUST have one because every contact needs to be
-    # attached via person_owner so it shows up in that owner's tab.
-    owner_obj = repo.get_owner_by_slug(owner) if owner else None
-    if owner_obj is None:
-        owners = repo.list_owners()
-        if not owners:
-            console.print(
-                "[red]No owners exist. Run `lodestar init` (or `lodestar owner add`) first.[/red]"
-            )
-            raise typer.Exit(code=1)
-        if owner is not None:
-            console.print(f"[red]Owner '{owner}' not found.[/red]")
-            raise typer.Exit(code=1)
-        owner_obj = owners[0]
-        console.print(
-            f"[dim]No --owner given; using first owner [cyan]{owner_obj.slug}[/cyan].[/dim]"
-        )
+    me = repo.get_me()
+    if me is None:
+        console.print("[red]Run `lodestar init` first.[/red]")
+        raise typer.Exit(code=1)
 
     suffix = path.suffix.lower()
     if suffix in {".xlsx", ".xls", ".xlsm"}:
+        if preset is None:
+            console.print(
+                f"[red]--preset 必填（xlsx 导入）。[/red] 可选值: {', '.join(preset_map)}."
+            )
+            raise typer.Exit(code=1)
         if preset not in preset_map:
             console.print(
-                f"[red]Unknown preset '{preset}'. Choose one of: "
-                f"{', '.join(preset_map)}.[/red]"
+                f"[red]Unknown preset '{preset}'. Choose one of: {', '.join(preset_map)}.[/red]"
             )
             raise typer.Exit(code=1)
         mapping = preset_map[preset]()
         xl = ExcelImporter(
-            repo, mapping=mapping,
+            repo,
+            mapping=mapping,
             infer_colleagues=infer_colleagues,
-            owner_id=owner_obj.id,
         )
         stats = xl.import_with_stats(path)
         console.print(
             f"[green]Imported[/green] {stats.people} contacts · "
             f"{stats.peer_edges} peer edges (from 认识/关系) · "
             f"{stats.colleague_edges} colleague edges (inferred) "
-            f"into owner [cyan]{owner_obj.slug}[/cyan] "
             f"from [cyan]{path.name}[/cyan]."
         )
     elif suffix == ".csv":
-        count = CSVImporter(repo, owner_id=owner_obj.id).import_file(path)
-        console.print(
-            f"[green]Imported[/green] {count} contacts into owner "
-            f"[cyan]{owner_obj.slug}[/cyan] from {path.name}."
-        )
+        count = CSVImporter(repo).import_file(path)
+        console.print(f"[green]Imported[/green] {count} contacts from {path.name}.")
     else:
         console.print(f"[red]Unsupported file type: {suffix}[/red]")
         raise typer.Exit(code=1)
@@ -526,10 +446,6 @@ def reembed_all() -> None:
 # --------------------------------------------------------------------- enrich
 @app.command()
 def enrich(
-    owner: Annotated[
-        str | None,
-        typer.Option("--owner", help="Owner slug. Defaults to the only owner if there's one."),
-    ] = None,
     limit: Annotated[
         int | None,
         typer.Option("--limit", help="Process at most N contacts (useful for smoke tests)."),
@@ -550,9 +466,7 @@ def enrich(
     ] = True,
     show_n: Annotated[
         int,
-        typer.Option(
-            "--show", help="In dry-run mode, print this many sample diffs in full."
-        ),
+        typer.Option("--show", help="In dry-run mode, print this many sample diffs in full."),
     ] = 10,
 ) -> None:
     """Use the configured LLM (Qwen via DashScope) to backfill structured
@@ -565,27 +479,11 @@ def enrich(
     from lodestar.enrich import L1Extractor, LLMClient, LLMError
 
     repo, _ = _open_repo()
-    owners = repo.list_owners()
-    if not owners:
-        console.print("[red]No owners exist. Run `lodestar init` first.[/red]")
+    me = repo.get_me()
+    if me is None:
+        console.print("[red]Run `lodestar init` first.[/red]")
         raise typer.Exit(code=1)
 
-    if owner is None:
-        if len(owners) == 1:
-            owner_obj = owners[0]
-        else:
-            console.print(
-                f"[red]Multiple owners exist; pass --owner one of: "
-                f"{', '.join(o.slug for o in owners)}.[/red]"
-            )
-            raise typer.Exit(code=1)
-    else:
-        owner_obj = repo.get_owner_by_slug(owner)
-        if owner_obj is None:
-            console.print(f"[red]Owner '{owner}' not found.[/red]")
-            raise typer.Exit(code=1)
-
-    assert owner_obj.id is not None
     try:
         client = LLMClient()
     except LLMError as exc:
@@ -593,12 +491,12 @@ def enrich(
         raise typer.Exit(code=1) from exc
 
     console.print(
-        f"[dim]Owner: [cyan]{owner_obj.slug}[/cyan] · model: "
+        f"[dim]DB: [cyan]{get_settings().db_path}[/cyan] · model: "
         f"[cyan]{client.model}[/cyan] · only_missing={only_missing} · "
         f"dry_run={dry_run}[/dim]"
     )
 
-    extractor = L1Extractor(repo, owner_id=owner_obj.id, client=client)
+    extractor = L1Extractor(repo, client=client)
     with console.status("LLM 抽取中..."):
         results = extractor.run(limit=limit, only_missing=only_missing)
 
@@ -648,13 +546,6 @@ def enrich(
 # --------------------------------------------------------- infer-colleagues
 @app.command(name="infer-colleagues")
 def infer_colleagues_cmd(
-    owner: Annotated[
-        str | None,
-        typer.Option(
-            "--owner",
-            help="Owner slug. Required when more than one owner exists.",
-        ),
-    ] = None,
     strength: Annotated[
         int,
         typer.Option(
@@ -672,49 +563,31 @@ def infer_colleagues_cmd(
         ),
     ] = True,
 ) -> None:
-    """Re-build same-company peer edges for an owner from the current
-    `person.companies` field (idempotent, safe to re-run).
+    """Re-build same-company peer edges from the current `person.companies`
+    field (idempotent, safe to re-run).
 
     Useful right after `enrich`: L1 backfills companies from free text,
     so a follow-up `infer-colleagues` materializes the implied
     "two contacts at the same firm" edges. Manual edges are never
     downgraded — provenance hierarchy in the repository protects them.
     """
-    from lodestar.importers import infer_colleague_edges_for_owner
+    from lodestar.importers import infer_colleague_edges
 
     repo, _ = _open_repo()
-    owners = repo.list_owners()
-    if not owners:
-        console.print("[red]No owners exist. Run `lodestar init` first.[/red]")
+    if repo.get_me() is None:
+        console.print("[red]Run `lodestar init` first.[/red]")
         raise typer.Exit(code=1)
 
-    if owner is None:
-        if len(owners) == 1:
-            owner_obj = owners[0]
-        else:
-            console.print(
-                f"[red]Multiple owners exist; pass --owner one of: "
-                f"{', '.join(o.slug for o in owners)}.[/red]"
-            )
-            raise typer.Exit(code=1)
-    else:
-        owner_obj = repo.get_owner_by_slug(owner)
-        if owner_obj is None:
-            console.print(f"[red]Owner '{owner}' not found.[/red]")
-            raise typer.Exit(code=1)
-    assert owner_obj.id is not None
-
-    cliques, edges, top = infer_colleague_edges_for_owner(
+    cliques, edges, top = infer_colleague_edges(
         repo,
-        owner_id=owner_obj.id,
         strength=strength,
         dry_run=dry_run,
     )
 
     verb = "Would add" if dry_run else "Added"
     console.print(
-        f"[bold]Owner[/bold] [cyan]{owner_obj.slug}[/cyan] · 同事推断: "
-        f"{cliques} 家公司 ≥2 人 · {verb} {edges} 条 [magenta]colleague_inferred[/magenta] 边 "
+        f"[bold]同事推断[/bold]: {cliques} 家公司 ≥2 人 · "
+        f"{verb} {edges} 条 [magenta]colleague_inferred[/magenta] 边 "
         f"(strength={strength})"
     )
     if top:
@@ -735,20 +608,16 @@ def infer_colleagues_cmd(
 # -------------------------------------------------------- normalize-companies
 @app.command(name="normalize-companies")
 def normalize_companies_cmd(
-    owner: Annotated[
-        str | None,
-        typer.Option(
-            "--owner",
-            help="Owner slug. Required when more than one owner exists.",
-        ),
-    ] = None,
     alias_file: Annotated[
         Path | None,
         typer.Option(
             "--alias-file",
             help="JSON/YAML file with `{canonical: [aliases]}` "
-                 "or `[{canonical, aliases}]`. Trumps --builtin on conflict.",
-            exists=True, file_okay=True, dir_okay=False, readable=True,
+            "or `[{canonical, aliases}]`. Trumps --builtin on conflict.",
+            exists=True,
+            file_okay=True,
+            dir_okay=False,
+            readable=True,
         ),
     ] = None,
     use_builtin: Annotated[
@@ -756,7 +625,7 @@ def normalize_companies_cmd(
         typer.Option(
             "--builtin/--no-builtin",
             help="Use the built-in 中国金融机构 alias map "
-                 "(国泰海通 / 申万宏源 / 中金 ...). Default on.",
+            "(国泰海通 / 申万宏源 / 中金 ...). Default on.",
         ),
     ] = True,
     use_llm: Annotated[
@@ -764,7 +633,7 @@ def normalize_companies_cmd(
         typer.Option(
             "--use-llm",
             help="Also ask the LLM to cluster the remaining company names. "
-                 "Output is reviewed in dry-run before any write.",
+            "Output is reviewed in dry-run before any write.",
         ),
     ] = False,
     dry_run: Annotated[
@@ -799,32 +668,14 @@ def normalize_companies_cmd(
     )
 
     repo, _ = _open_repo()
-    owners = repo.list_owners()
-    if not owners:
-        console.print("[red]No owners exist. Run `lodestar init` first.[/red]")
+    if repo.get_me() is None:
+        console.print("[red]Run `lodestar init` first.[/red]")
         raise typer.Exit(code=1)
 
-    if owner is None:
-        if len(owners) == 1:
-            owner_obj = owners[0]
-        else:
-            console.print(
-                f"[red]Multiple owners exist; pass --owner one of: "
-                f"{', '.join(o.slug for o in owners)}.[/red]"
-            )
-            raise typer.Exit(code=1)
-    else:
-        owner_obj = repo.get_owner_by_slug(owner)
-        if owner_obj is None:
-            console.print(f"[red]Owner '{owner}' not found.[/red]")
-            raise typer.Exit(code=1)
-    assert owner_obj.id is not None
-
-    rows = repo.list_owner_companies(owner_obj.id)
+    rows = repo.list_companies()
     if not rows:
         console.print(
-            f"[yellow]Owner [cyan]{owner_obj.slug}[/cyan] 下没有任何 person_company "
-            "记录；先跑 import / enrich 再回来。[/yellow]"
+            "[yellow]当前 db 没有任何 person_company 记录；先跑 import / enrich 再回来。[/yellow]"
         )
         return
     present = {name: n for _cid, name, n in rows}
@@ -833,12 +684,10 @@ def normalize_companies_cmd(
     if alias_file is not None:
         try:
             user_aliases = load_alias_file(alias_file)
-        except Exception as exc:  # noqa: BLE001
+        except Exception as exc:
             console.print(f"[red]读取 alias 文件失败：{exc}[/red]")
             raise typer.Exit(code=1) from exc
-        console.print(
-            f"[dim]从 {alias_file} 读取 {len(user_aliases)} 条用户 alias 规则。[/dim]"
-        )
+        console.print(f"[dim]从 {alias_file} 读取 {len(user_aliases)} 条用户 alias 规则。[/dim]")
 
     llm_groups: list[AliasGroup] = []
     if use_llm:
@@ -875,16 +724,13 @@ def normalize_companies_cmd(
     )
 
     if not groups:
-        console.print(
-            f"[green]Owner [cyan]{owner_obj.slug}[/cyan] 没有发现任何 alias 合并机会。[/green]"
-        )
+        console.print("[green]当前 db 没有发现任何 alias 合并机会。[/green]")
         return
 
     n_present = len(present)
     n_after = n_present - sum(len(g.aliases) for g in groups)
     console.print(
-        f"[bold]Owner[/bold] [cyan]{owner_obj.slug}[/cyan] · "
-        f"将 {n_present} 个公司名归并为 {n_after} 个 "
+        f"[bold]当前 db[/bold] · 将 {n_present} 个公司名归并为 {n_after} 个 "
         f"({n_present - n_after} 条 alias)"
     )
 
@@ -913,11 +759,7 @@ def normalize_companies_cmd(
     total_reassigned = 0
     total_deleted = 0
     for g in groups:
-        reassigned, deleted = repo.merge_companies(
-            g.canonical,
-            g.aliases,
-            owner_id=owner_obj.id,
-        )
+        reassigned, deleted = repo.merge_companies(g.canonical, g.aliases)
         total_reassigned += reassigned
         total_deleted += deleted
 
@@ -926,8 +768,8 @@ def normalize_companies_cmd(
         f"重定向 [bold]{total_reassigned}[/bold] 条 person_company 关联。"
     )
     console.print(
-        "[dim]接下来：[bold]uv run lodestar infer-colleagues --owner "
-        f"{owner_obj.slug} --apply[/bold] 把新挖出的同事关系连成 peer 边。[/dim]"
+        "[dim]接下来：[bold]uv run lodestar infer-colleagues --apply[/bold] "
+        "把新挖出的同事关系连成 peer 边。[/dim]"
     )
 
 
@@ -949,25 +791,16 @@ def viz(
     open_browser: Annotated[
         bool, typer.Option("--open/--no-open", help="Auto-open the HTML in your browser.")
     ] = True,
-    owner: Annotated[
-        str | None,
-        typer.Option(
-            "--owner",
-            help="Owner slug whose network drives the goal-based highlighting.",
-        ),
-    ] = None,
 ) -> None:
-    """Render the network as an interactive cyberpunk HTML graph."""
+    """Render the network as an interactive HTML graph."""
     from lodestar.viz import GraphExporter
 
     repo, _ = _open_repo()
     settings = get_settings()
-    owner_obj = _resolve_owner(repo, owner) if goal else None
 
     highlighted: list = []
     title = "Network"
     if goal:
-        assert owner_obj is not None
         title = f"Goal: {goal}"
         intent = _make_intent(goal, no_llm=no_llm)
         try:
@@ -975,7 +808,8 @@ def viz(
         except Exception:
             embedder = None
         candidates = HybridSearch(
-            repo=repo, embedder=embedder, owner_id=owner_obj.id,
+            repo=repo,
+            embedder=embedder,
         ).search(intent, top_k=settings.top_k, recall_k=settings.reranker_recall_k)
         if candidates:
             reranker = build_reranker_from_settings()
@@ -983,7 +817,6 @@ def viz(
             highlighted = PathFinder(
                 repo=repo,
                 max_hops=settings.max_hops,
-                owner_id=owner_obj.id,
                 weak_me_floor=settings.weak_me_floor,
             ).rank(candidates)[:top]
 
@@ -1015,36 +848,92 @@ def _make_intent(goal: str, no_llm: bool):  # type: ignore[no-untyped-def]
 def serve(
     host: Annotated[str, typer.Option(help="Bind host.")] = "127.0.0.1",
     port: Annotated[int, typer.Option(help="Bind port.")] = 8765,
+    mount: Annotated[
+        list[str] | None,
+        typer.Option(
+            "--mount",
+            "-m",
+            help=(
+                "挂载一个网络: ``slug=path/to/lodestar.db``。可重复多次，例如 "
+                "``--mount richard=./richard.db --mount tommy=./tommy.db``。"
+                "不传时挂载全局 ``--db`` / 默认路径，slug 取数据库文件名 stem。"
+            ),
+        ),
+    ] = None,
     open_browser: Annotated[
         bool, typer.Option("--open/--no-open", help="Auto-open browser.")
     ] = True,
-    reload: Annotated[bool, typer.Option(help="Hot reload (dev).")] = False,
+    reload: Annotated[bool, typer.Option(help="Hot reload (dev). Conflicts with --mount.")] = False,
 ) -> None:
-    """Launch the interactive web UI at http://HOST:PORT/"""
+    """Launch the interactive web UI at http://HOST:PORT/.
+
+    每个 ``--mount`` 在 URL 前缀 ``/r/<slug>/`` 下独立运行：拥有自己的 db、
+    自己的 ``me``、自己的 web 密码（``lodestar --db <path> web-password``
+    设置）；切到另一个 tab **强制重新解锁**。
+    """
+    import json
+    import threading
+    import webbrowser
+
     import uvicorn
 
-    repo, _ = _open_repo()
-    try:
-        owners = repo.list_owners()
-    finally:
-        repo.conn.close()
-    if not owners:
-        console.print("[red]Run `lodestar init` first.[/red]")
-        raise typer.Exit(code=1)
+    mounts: list[dict[str, str]] = []
+    seen: set[str] = set()
+    if mount:
+        for spec in mount:
+            if "=" not in spec:
+                console.print(f"[red]--mount 必须形如 slug=path，收到 [bold]{spec}[/bold][/red]")
+                raise typer.Exit(1)
+            slug, _, raw_path = spec.partition("=")
+            slug = slug.strip()
+            db_path = Path(raw_path.strip()).expanduser().resolve()
+            if not slug or not slug.replace("-", "").replace("_", "").isalnum():
+                console.print(
+                    f"[red]Slug 必须是 URL-safe (字母/数字/-/_)，收到 [bold]{slug}[/bold][/red]"
+                )
+                raise typer.Exit(1)
+            if slug in seen:
+                console.print(f"[red]重复的 mount slug: [bold]{slug}[/bold][/red]")
+                raise typer.Exit(1)
+            if not db_path.exists():
+                console.print(f"[red]--mount {slug} 指向的 db 不存在: [bold]{db_path}[/bold][/red]")
+                raise typer.Exit(1)
+            mounts.append({"slug": slug, "db_path": str(db_path)})
+            seen.add(slug)
+    else:
+        default_path = Path(get_settings().db_path)
+        if not default_path.exists():
+            console.print(
+                f"[red]Default db 不存在: [bold]{default_path}[/bold]。"
+                "先 `lodestar init`，或用 `--mount slug=path`。[/red]"
+            )
+            raise typer.Exit(1)
+        mounts.append({"slug": "me", "db_path": str(default_path)})
+
+    if reload and len(mounts) > 1:
+        console.print(
+            "[red]--reload 与多 mount 不兼容（reload 走 import-string 工厂，"
+            "无法把动态 mount 传给子进程）。去掉 --reload 或改用单 mount。[/red]"
+        )
+        raise typer.Exit(1)
+
+    os.environ["LODESTAR_MOUNTS_JSON"] = json.dumps(mounts, ensure_ascii=False)
 
     url = f"http://{host}:{port}/"
     console.print(f"[bold green]★ Lodestar serving at[/bold green] [cyan]{url}[/cyan]")
+    for m in mounts:
+        console.print(f"  · /r/{m['slug']}/  [dim]→ {m['db_path']}[/dim]")
     console.print("[dim]Press Ctrl+C to stop.[/dim]")
 
     if open_browser:
-        import threading
-        import webbrowser
-
         threading.Timer(1.2, lambda: webbrowser.open_new_tab(url)).start()
 
     uvicorn.run(
         "lodestar.web.app:create_app",
-        host=host, port=port, factory=True, reload=reload,
+        host=host,
+        port=port,
+        factory=True,
+        reload=reload,
         log_level="info",
     )
 

@@ -7,7 +7,7 @@ from pathlib import Path
 import polars as pl
 
 from lodestar.db import Repository
-from lodestar.importers import ExcelImporter, richard_finance_preset
+from lodestar.importers import ExcelImporter, richard_network_preset
 
 
 def _make_xlsx(path: Path) -> None:
@@ -31,12 +31,12 @@ def _make_xlsx(path: Path) -> None:
     df.write_excel(path)
 
 
-def test_richard_finance_preset_roundtrip(repo: Repository, tmp_path: Path) -> None:
+def test_richard_network_preset_roundtrip(repo: Repository, tmp_path: Path) -> None:
     repo.ensure_me(name="我")
     xlsx_path = tmp_path / "contacts.xlsx"
     _make_xlsx(xlsx_path)
 
-    importer = ExcelImporter(repo, mapping=richard_finance_preset())
+    importer = ExcelImporter(repo, mapping=richard_network_preset())
     count = importer.import_file(xlsx_path)
 
     assert count == 4  # four rows processed
@@ -100,7 +100,7 @@ def test_strength_zero_marks_uncontacted_and_skips_me_edge(
     """The single source of truth for "did I reach this person?" is the
     `可信度` column: 0 → 未联系 (no Me-edge, is_wishlist=True), 1-5 →
     已联系 (Me-edge with that strength). No separate `关系类型` column."""
-    from lodestar.importers import ExcelImporter, extended_network_preset
+    from lodestar.importers import ExcelImporter, richard_network_preset
 
     repo.ensure_me(name="我")
     df = pl.DataFrame({
@@ -111,7 +111,7 @@ def test_strength_zero_marks_uncontacted_and_skips_me_edge(
     xlsx_path = tmp_path / "wish.xlsx"
     df.write_excel(xlsx_path)
 
-    ExcelImporter(repo, mapping=extended_network_preset()).import_file(xlsx_path)
+    ExcelImporter(repo, mapping=richard_network_preset()).import_file(xlsx_path)
 
     star = repo.find_person_by_name("想认识一号")
     assert star is not None
@@ -144,7 +144,7 @@ def test_legacy_关系类型_column_is_silently_ignored(
     and behaviour should be driven purely by `可信度`. We use intentionally
     contradictory values (legacy 关系类型 says one thing, 可信度 says the
     opposite) and assert that 可信度 always wins."""
-    from lodestar.importers import ExcelImporter, extended_network_preset
+    from lodestar.importers import ExcelImporter, richard_network_preset
 
     repo.ensure_me(name="我")
     df = pl.DataFrame({
@@ -158,7 +158,7 @@ def test_legacy_关系类型_column_is_silently_ignored(
     xlsx_path = tmp_path / "legacy.xlsx"
     df.write_excel(xlsx_path)
 
-    ExcelImporter(repo, mapping=extended_network_preset()).import_file(xlsx_path)
+    ExcelImporter(repo, mapping=richard_network_preset()).import_file(xlsx_path)
 
     a = repo.find_person_by_name("A")
     b = repo.find_person_by_name("B")

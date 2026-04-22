@@ -122,35 +122,48 @@ button { cursor: pointer; }
   flex-shrink: 0;
 }
 
-/* Owner segmented tab — sits between brand and search box.
-   Linear-flavoured: muted track, single elevated active pill, no neon. */
-.owner-tabs {
+/* Mount segmented tab — sits between brand and search box.
+   Linear-flavoured: muted track, single elevated active pill, lock glyph
+   for password-protected mounts. Switching mounts is a hard navigation
+   so the visual feedback is instant (no async swap state to worry about). */
+.mount-tabs {
   display: inline-flex; align-items: center; gap: 2px;
   padding: 3px;
   background: var(--bg-overlay);
   border: 1px solid var(--border);
-  border-radius: 8px;
+  border-radius: 9px;
   height: 34px;
   margin-right: 4px;
 }
-.owner-tab {
+.mount-tab {
   appearance: none; background: transparent; border: 0;
   display: inline-flex; align-items: center; gap: 8px;
   padding: 0 12px; height: 26px;
   font: inherit; font-size: 13px; font-weight: 500;
   letter-spacing: -0.005em;
   color: var(--text-muted);
-  border-radius: 6px;
+  border-radius: 7px;
   cursor: pointer;
-  transition: background 120ms ease, color 120ms ease;
+  transition: background 140ms ease, color 140ms ease, box-shadow 140ms ease;
 }
-.owner-tab:hover { color: var(--text-secondary); }
-.owner-tab.is-active {
+.mount-tab:hover {
+  color: var(--text-secondary);
+  background: rgba(208, 214, 224, 0.04);
+}
+.mount-tab.is-active {
   background: rgba(208, 214, 224, 0.10);
   color: var(--text);
-  box-shadow: 0 0 0 1px rgba(208, 214, 224, 0.18);
+  box-shadow:
+    0 0 0 1px rgba(208, 214, 224, 0.16),
+    0 1px 0 rgba(0, 0, 0, 0.25);
 }
-.owner-tab .owner-count {
+.mount-tab .mount-lock {
+  color: var(--text-muted);
+  opacity: 0.55;
+  flex-shrink: 0;
+}
+.mount-tab.is-active .mount-lock { opacity: 0.85; color: var(--text-secondary); }
+.mount-tab .mount-count {
   font-variant-numeric: tabular-nums;
   font-size: 11px;
   color: var(--text-muted);
@@ -158,16 +171,10 @@ button { cursor: pointer; }
   border-radius: 4px;
   background: rgba(255, 255, 255, 0.04);
 }
-.owner-tab.is-active .owner-count {
+.mount-tab.is-active .mount-count {
   color: var(--text-secondary);
   background: rgba(255, 255, 255, 0.07);
 }
-.owner-tab .owner-lock {
-  font-size: 11px;
-  line-height: 1;
-  opacity: 0.55;
-}
-.owner-tab.is-active .owner-lock { opacity: 0.75; }
 
 .search-box {
   flex: 1; max-width: 600px;
@@ -900,19 +907,73 @@ button { cursor: pointer; }
   margin-top: 18px; padding-top: 14px;
   border-top: 1px solid var(--border);
 }
-.owner-unlock-modal {
-  width: min(400px, 100%);
+/* ---- mount unlock (one-db-per-owner) ----
+   解锁蒙层不盖顶栏，用户切到别的 mount 时会触发整页跳转，整个页面会被
+   浏览器替换，所以**不需要**在 modal 上做"超期 / 取消"那一套 Promise 串扰
+   逻辑。Modal 自身只关心"输密码 → 拿 token"。视觉上往中央堆一个
+   稍微抬高的弹窗，加个 lock 图标和简短副标题，让"切 tab 必重输"这个
+   规则被用户接受为正常流程而不是 friction。 */
+.mount-unlock-bg {
+  top: 52px;            /* below topbar */
+  z-index: 45;
+  background: rgba(8, 9, 11, 0.62);
+  backdrop-filter: blur(12px) saturate(1.05);
+  -webkit-backdrop-filter: blur(12px) saturate(1.05);
+}
+.mount-unlock-modal {
+  width: min(380px, 100%);
+  padding: 28px 26px 22px;
+  text-align: left;
+  border-radius: 14px;
+  background:
+    radial-gradient(120% 140% at 0% 0%, rgba(208, 214, 224, 0.04), transparent 55%),
+    var(--bg-elevated);
+  border-color: rgba(208, 214, 224, 0.14);
+  box-shadow:
+    0 30px 60px rgba(0, 0, 0, 0.55),
+    0 0 0 1px rgba(208, 214, 224, 0.06) inset;
+}
+.mount-unlock-modal .unlock-icon {
+  display: inline-flex; align-items: center; justify-content: center;
+  width: 36px; height: 36px;
+  border-radius: 9px;
+  margin-bottom: 14px;
+  color: var(--text-secondary);
+  background: rgba(208, 214, 224, 0.06);
+  border: 1px solid rgba(208, 214, 224, 0.10);
+}
+.mount-unlock-modal h2 {
+  margin: 0 0 6px 0;
+  font-size: 17px; font-weight: 590;
+  letter-spacing: -0.02em;
+}
+.mount-unlock-modal .unlock-subtitle {
+  margin: 0 0 18px 0;
+  font-size: 12.5px;
+  color: var(--text-muted);
+  display: flex; align-items: center; gap: 8px;
+  flex-wrap: wrap;
+}
+.mount-unlock-modal .unlock-subtitle .mono {
+  font-family: var(--font-mono, ui-monospace, monospace);
+  color: var(--text-secondary);
+  font-weight: 500;
+}
+.mount-unlock-modal .unlock-subtitle .unlock-sep {
+  color: var(--text-muted);
+  opacity: 0.6;
+}
+.mount-unlock-modal .unlock-hint { color: var(--text-muted); }
+.mount-unlock-modal .field { margin-bottom: 12px; }
+.mount-unlock-modal .field input {
+  height: 38px;
+  font-size: 14px;
+  letter-spacing: 0.04em;
 }
 .unlock-error {
   margin: -4px 0 0 0;
   font-size: 12.5px;
   color: var(--danger);
-}
-/* 解锁蒙层：不盖顶栏，用户随时可以点另一个 owner tab 切走（B 模式下
-   richard 与 tommy 严格独立，不应被默认 owner 的密码挡住进入路径）。 */
-.owner-unlock-bg {
-  top: 52px;            /* topbar 高度 */
-  z-index: 45;          /* 必须低于 .topbar 的 z-index:50，让顶栏永远可点 */
 }
 
 /* ============================================================

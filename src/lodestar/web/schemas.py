@@ -47,34 +47,39 @@ class GraphPayload(BaseModel):
         default=4, ge=1, le=5,
         description="Same as PathFinder: Me edges below this are weak for graph viz.",
     )
-    owner_slug: str | None = None
-    owner_display_name: str | None = None
+    mount_slug: str
+    mount_display_name: str
 
 
-class OwnerDTO(BaseModel):
-    """One network owner exposed to the SPA."""
+# ---- mount registry (一人一库) ----------------------------------------
+class MountDTO(BaseModel):
+    """One mounted network exposed to the SPA top-bar."""
 
-    id: int
     slug: str
     display_name: str
-    me_person_id: int
+    me_person_id: int | None = None
     accent_color: str | None = None
     contact_count: int = 0
-    is_default: bool = False
-    web_locked: bool = False
+    locked: bool = False  # True ⇔ this mount has a web password set
 
 
-class OwnersResponse(BaseModel):
-    owners: list[OwnerDTO]
+class MountsResponse(BaseModel):
+    """Returned by the **root** app at ``GET /api/mounts``.
+
+    The SPA reads this once on first load to render the owner tabs and to
+    decide whether to challenge for a password. ``default_slug`` is just a
+    UX hint (which tab gets focus when the user lands on ``/``).
+    """
+
+    mounts: list[MountDTO]
     default_slug: str | None = None
 
 
-class OwnerUnlockRequest(BaseModel):
-    slug: str
+class UnlockRequest(BaseModel):
     password: str = ""
 
 
-class OwnerUnlockResponse(BaseModel):
+class UnlockResponse(BaseModel):
     token: str
     unlocked: bool = True
 
@@ -114,12 +119,8 @@ class SearchResponse(BaseModel):
     intent_keywords: list[str]
     results: list[PathResultDTO]               # combined list, sorted by combined_score
     indirect: list[PathResultDTO] = []         # multi-hop paths via intermediaries
-    direct: list[PathResultDTO] = []           # 1-hop strong contacts
-    weak: list[PathResultDTO] = []             # 1-hop weak acquaintances
+    contacted: list[PathResultDTO] = []        # 1-hop, sorted by strength
     wishlist: list[PathResultDTO] = []         # any kind, but is_wishlist=True
-    # Deprecated alias kept for one release so older clients still parse.
-    # Mirrors `indirect`. Will be removed in a follow-up.
-    targets: list[PathResultDTO] = []
     highlighted_node_ids: list[int]
     highlighted_edge_ids: list[str]
 
@@ -215,8 +216,7 @@ class EnrichDiff(BaseModel):
 
 class EnrichJobState(BaseModel):
     task_id: str
-    owner_id: int
-    owner_slug: str
+    mount_slug: str
     status: str  # 'pending' | 'running' | 'done' | 'error'
     only_missing: bool
     total: int

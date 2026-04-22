@@ -1,20 +1,21 @@
 """Excel (.xlsx) importer with flexible column mapping.
 
-Designed around the real-world formats used by
-`richard_network.xlsx` (originally `pyq.xlsx`) and `demo_network.xlsx`:
+Two built-in presets, **按 owner 命名**：
 
-    序号 | 姓名 | 所属行业 | 公司 | 职务 | 城市 | AI标准化特征 |
-    可信度（...） | 潜在需求 | 认识 | 备注
+* `richard_network_preset()` — `examples/richard_network.xlsx` 的 13 列
+  通用形态（也是 `template.xlsx` / `demo_network.xlsx` 共用模板）：
 
-…but any column present can be mapped. Three built-in presets:
+      序号 | 姓名 | 所属行业 | 公司 | 职务 | 城市 | AI标准化特征 |
+      可信度（言行一致性0-5分）| 合作价值（0-5）| 潜在需求 | 资源类型 |
+      认识 | 备注
 
-* `richard_finance_preset()` — Richard 的 `richard_network.xlsx` 形态
-  （8 列、无 peer edges）。历史上叫 `chinese_finance_preset` /
-  `pyq.xlsx`；按 owner 命名后改成现在的名字。
-* `extended_network_preset()` — adds 公司 / 城市 / 认识 / 备注 columns,
-  and builds peer-to-peer edges from the `认识` column.
+  其中 `认识` 列由 importer 解析为 peer-to-peer 边。
+
 * `tommy_contacts_preset()` — Tommy 的 `tommy_network.xlsx`（16 列机构
-  合作画像表）。
+  合作画像表，列名长且自描述，刻意不规范化）。
+
+任何 owner 若未来需要 schema 不同的 preset，再 fork 一个独立函数；
+**禁止**保留过渡别名或双写映射（参见 `AGENTS.md`：数据模型一次到位）。
 
 If the workbook has a second sheet named `关系` (or `edges`) with columns
 `(甲, 乙, 强度, 关系, 频率)`, those rows are imported as authoritative
@@ -169,35 +170,6 @@ class ColumnMapping:
     peers_column: str | None = None
 
 
-def richard_finance_preset() -> ColumnMapping:
-    """Preset matching the 8 columns of `richard_network.xlsx`
-    (originally `pyq.xlsx`; no peer edges).
-
-    Kept as a stable, narrow shape — Richard's source workbook only
-    carries 行业 / 职务 / 可信度 / 需求, so we don't try to infer
-    company-mate edges from it.
-    """
-
-    def compose_bio(row: dict[str, object]) -> str | None:
-        parts: list[str] = []
-        role = _cell(row.get("职务"))
-        industry = _cell(row.get("所属行业"))
-        if industry:
-            parts.append(f"行业：{industry}")
-        if role:
-            parts.append(f"职务：{role}")
-        return " · ".join(parts) if parts else None
-
-    return ColumnMapping(
-        name="姓名",
-        bio=compose_bio,
-        tags=["所属行业", "AI标准化特征"],
-        needs=["潜在需求"],
-        strength_column="可信度（言行一致性0-5分）",
-        context_column="职务",
-    )
-
-
 def tommy_contacts_preset() -> ColumnMapping:
     """Mapping for Tommy's raw `tommy_network.xlsx` (16 columns;
     historically `contacts.xlsx`).
@@ -206,7 +178,7 @@ def tommy_contacts_preset() -> ColumnMapping:
     "可信度（承诺一致性 0-5分）"), so we hard-code the long forms here
     rather than asking Tommy to rename anything before import.
 
-    Compared to `extended_network_preset` we additionally fold:
+    Compared to `richard_network_preset` we additionally fold:
       - 单笔可投资金额 / 风险承受能力 / 共赢性 / 关系阶段 → bio
       - 资源类型 / 核心标签 / 可合作业务范围 / 兴趣偏好 → tags
       - 合作价值评分（0-5） → bio (`合作价值：X/5`)
@@ -267,18 +239,22 @@ def tommy_contacts_preset() -> ColumnMapping:
     )
 
 
-def extended_network_preset() -> ColumnMapping:
-    """Preset for the richer 14-column template (`examples/template.xlsx`,
-    `demo_network.xlsx`).
+def richard_network_preset() -> ColumnMapping:
+    """Preset for `examples/richard_network.xlsx` 的 13 列形态，也是
+    `examples/template.xlsx` / `examples/demo_network.xlsx` 共用的通用模板。
 
-    Folds the v2 Tommy-style columns into the existing schema without
-    expanding the DB:
+    列：序号 · 姓名 · 所属行业 · 公司 · 职务 · 城市 · AI标准化特征 ·
+        可信度（言行一致性0-5分）· 合作价值（0-5）· 潜在需求 · 资源类型 ·
+        认识 · 备注
+
+    特点：
       - `合作价值（0-5）` → 拼到 bio 末尾，例如 `合作价值：4/5`
       - `资源类型`        → 折进 tags（与「所属行业」「AI 标准化特征」
                             一起组成 tag 集合）
+      - `认识`            → 由 importer 解析为 peer-to-peer 边
 
-    Any of these columns can be absent — the importer simply skips
-    anything it doesn't find.
+    任意列缺失 importer 都会优雅跳过；新增 owner 若 schema 与之相同，
+    可直接复用本 preset，不必再造轮子。
     """
 
     def compose_bio(row: dict[str, object]) -> str | None:
@@ -372,18 +348,11 @@ class ExcelImporter:
         *,
         infer_colleagues: bool = True,
         colleague_strength: int = 4,
-        owner_id: int | None = None,
     ) -> None:
         self._repo = repo
-        self._mapping = mapping or extended_network_preset()
+        self._mapping = mapping or richard_network_preset()
         self._infer_colleagues = infer_colleagues
         self._colleague_strength = colleague_strength
-        # When set, every imported person is also attached to this owner
-        # via person_owner, every Me-edge points at this owner's
-        # me_person_id, and inferred colleague edges are restricted to
-        # this owner's roster so Richard's contacts don't accidentally
-        # become Tommy's same-company peers.
-        self._owner_id = owner_id
 
     # Back-compat: the CLI still calls `.import_file(path)` expecting an int.
     def import_file(self, path: str | Path) -> int:
@@ -391,11 +360,10 @@ class ExcelImporter:
         return stats.people
 
     def import_with_stats(self, path: str | Path) -> ImportStats:
-        me = self._repo.get_me(owner_id=self._owner_id)
+        me = self._repo.get_me()
         if me is None or me.id is None:
             raise RuntimeError(
-                "No `me` record for the requested owner. "
-                "Run `lodestar init` (or `lodestar owner add`) first."
+                "No `me` record. Run `lodestar init` first."
             )
 
         df = _read_any_spreadsheet(path)
@@ -475,9 +443,6 @@ class ExcelImporter:
 
         assert saved.id is not None
 
-        if self._owner_id is not None:
-            self._repo.attach_person_to_owner(saved.id, self._owner_id)
-
         if is_wishlist_row:
             # 可信度=0 → 未联系: skip the Me-edge entirely. Reachable only
             # via peers' `认识` references in pass 2. is_wishlist is already
@@ -497,7 +462,6 @@ class ExcelImporter:
                 frequency=Frequency.YEARLY,
                 source="manual",
             ),
-            owner_id=self._owner_id,
         )
         return True
 
@@ -546,7 +510,6 @@ class ExcelImporter:
                         frequency=Frequency.YEARLY,
                         source="manual",
                     ),
-                    owner_id=self._owner_id,
                 )
 
         for w in warnings:
@@ -604,19 +567,13 @@ class ExcelImporter:
                     frequency=freq,
                     source="manual",
                 ),
-                owner_id=self._owner_id,
             )
         return len(added)
 
     # ---------- pass 3 ----------
     def _infer_colleague_edges(self, *, me_id: int) -> int:
-        """For every company with ≥2 members, connect them all (clique).
-
-        When this importer is bound to a specific owner, the inference is
-        restricted to that owner's roster — otherwise Richard's same-firm
-        contacts would auto-connect to Tommy's contacts at the same firm.
-        """
-        people = self._repo.list_people(owner_id=self._owner_id)
+        """For every company with ≥2 members, connect them all (clique)."""
+        people = self._repo.list_people()
         company_to_members: dict[str, list[int]] = {}
         for p in people:
             if p.id is None or p.id == me_id:
@@ -646,7 +603,6 @@ class ExcelImporter:
                             frequency=Frequency.MONTHLY,
                             source="colleague_inferred",
                         ),
-                        owner_id=self._owner_id,
                     )
         return len(added)
 
@@ -695,15 +651,15 @@ def _canonical_pair(a: int, b: int) -> tuple[int, int]:
     return (a, b) if a <= b else (b, a)
 
 
-def infer_colleague_edges_for_owner(
+def infer_colleague_edges(
     repo: Repository,
     *,
-    owner_id: int,
     strength: int = 4,
     dry_run: bool = False,
 ) -> tuple[int, int, list[tuple[str, int]]]:
-    """Re-run same-company colleague inference over an owner's current
-    roster. Idempotent: re-runs are safe because `Repository.add_relationship`
+    """Re-run same-company colleague inference over the current roster.
+
+    Idempotent: re-runs are safe because `Repository.add_relationship`
     enforces the provenance hierarchy (manual > colleague_inferred), so
     edges the user already curated by hand are never downgraded.
 
@@ -711,9 +667,9 @@ def infer_colleague_edges_for_owner(
     where `top_companies` is a sorted [(company, member_count), ...] list
     capped at the 10 largest cliques — useful for the CLI summary table.
     """
-    me = repo.get_me(owner_id=owner_id)
+    me = repo.get_me()
     me_id = me.id if me else None
-    people = repo.list_people(owner_id=owner_id)
+    people = repo.list_people()
     company_to_members: dict[str, list[int]] = {}
     for p in people:
         if p.id is None or p.id == me_id:
@@ -749,7 +705,6 @@ def infer_colleague_edges_for_owner(
                 frequency=Frequency.MONTHLY,
                 source="colleague_inferred",
             ),
-            owner_id=owner_id,
         )
     return len(cliques), len(pairs), top
 

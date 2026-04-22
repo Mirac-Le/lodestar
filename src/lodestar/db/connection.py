@@ -1,7 +1,12 @@
-"""Connection helpers. Owns the sqlite-vec extension loading dance."""
+"""Connection helpers. Owns the sqlite-vec extension loading dance.
+
+一人一库后，``connect()`` / ``init_schema()`` 都只面对**一个 db 文件**。
+``serve --mount`` 会 per-mount 各调一次。
+"""
 
 from __future__ import annotations
 
+import secrets
 import sqlite3
 from pathlib import Path
 
@@ -31,51 +36,29 @@ def connect(db_path: str | Path) -> sqlite3.Connection:
 
 
 def init_schema(conn: sqlite3.Connection, embedding_dim: int) -> None:
-    """Create all tables if they don't exist, then run lightweight column-add
-    migrations for existing databases. Idempotent."""
+    """Create all tables if they don't exist. Idempotent.
+
+    一次性 schema：v4 之前 owner / person_owner / relationship.owner_id
+    那套残留数据**不**做迁移（旧库请走 ``cp .bak`` 备份 + 按 quickstart
+    重跑的路线，参见 README）。本函数只在干净 db 上 CREATE，不做 ALTER。
+
+    每次启动还会确保 ``meta.unlock_secret`` 存在 —— per-db HMAC 签名 key，
+    db 出生时随机生成，cp 走的人把自己的 secret 一起带走，互不相干。
+    """
     with conn:
         for stmt in DDL_STATEMENTS:
             conn.execute(stmt)
         conn.execute(vec_ddl(embedding_dim))
-        _migrate_in_place(conn)
+        _ensure_unlock_secret(conn)
 
 
-def _migrate_in_place(conn: sqlite3.Connection) -> None:
-    """Add columns introduced after the initial schema.
-
-    SQLite has no `ADD COLUMN IF NOT EXISTS`, so we inspect `PRAGMA
-    table_info` and only ALTER when the column is missing. Each migration
-    must be safe to re-run on already-upgraded databases.
-    """
-    existing_person_cols = {
-        row["name"] for row in conn.execute("PRAGMA table_info(person)")
-    }
-    if "is_wishlist" not in existing_person_cols:
-        conn.execute(
-            "ALTER TABLE person ADD COLUMN is_wishlist INTEGER NOT NULL DEFAULT 0"
-        )
-
-    existing_rel_cols = {
-        row["name"] for row in conn.execute("PRAGMA table_info(relationship)")
-    }
-    if "owner_id" not in existing_rel_cols:
-        conn.execute(
-            "ALTER TABLE relationship ADD COLUMN owner_id INTEGER "
-            "REFERENCES owner(id) ON DELETE SET NULL"
-        )
-        conn.execute("CREATE INDEX IF NOT EXISTS ix_rel_owner ON relationship(owner_id)")
-    if "source" not in existing_rel_cols:
-        # SQLite ALTER ADD COLUMN cannot add a column with a non-constant
-        # default if it includes a CHECK constraint, so we add the column
-        # with a constant default and skip the CHECK on legacy DBs.
-        conn.execute(
-            "ALTER TABLE relationship ADD COLUMN source TEXT NOT NULL DEFAULT 'manual'"
-        )
-
-    existing_owner_cols = {
-        row["name"] for row in conn.execute("PRAGMA table_info(owner)")
-    }
-    if "web_password_hash" not in existing_owner_cols:
-        conn.execute(
-            "ALTER TABLE owner ADD COLUMN web_password_hash TEXT"
-        )
+def _ensure_unlock_secret(conn: sqlite3.Connection) -> None:
+    row = conn.execute(
+        "SELECT value FROM meta WHERE key = 'unlock_secret'"
+    ).fetchone()
+    if row is not None and row["value"]:
+        return
+    conn.execute(
+        "INSERT OR REPLACE INTO meta (key, value) VALUES ('unlock_secret', ?)",
+        (secrets.token_hex(32),),
+    )

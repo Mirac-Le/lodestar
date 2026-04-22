@@ -102,11 +102,9 @@ class RelationshipParser:
     def __init__(
         self,
         repo: Repository,
-        owner_id: int,
         client: LLMClient,
     ) -> None:
         self._repo = repo
-        self._owner_id = owner_id
         self._client = client
 
     # --------------------------------------------------------------- public
@@ -122,7 +120,7 @@ class RelationshipParser:
         # 没有任何联系人就没有可输出的 token；早返回防止给 LLM 一个空场景。
         if not roster:
             return RelationshipParseResult(
-                error="当前 owner 还没有联系人，先添加一些再来录入关系。",
+                error="当前网络还没有联系人，先添加一些再来录入关系。",
             )
 
         user_payload = json.dumps(
@@ -141,8 +139,8 @@ class RelationshipParser:
 
     # --------------------------------------------------------------- helpers
     def _build_anonymizer(self) -> tuple[Anonymizer, dict[int, str]]:
-        people = self._repo.list_people(owner_id=self._owner_id)
-        me = self._repo.get_me(owner_id=self._owner_id)
+        people = self._repo.list_people()
+        me = self._repo.get_me()
         me_name = me.name if me else "我"
         me_id = me.id if me and me.id is not None else -1
 

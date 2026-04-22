@@ -94,8 +94,8 @@ BUILTIN_ALIASES: dict[str, list[str]] = {
 class AliasGroup:
     """One proposed merge: `aliases` will be folded into `canonical`.
 
-    `headcount` is the total distinct people across all members under the
-    target owner, *before* the merge — used in the dry-run table so the
+    `headcount` is the total distinct people across all members in the
+    network *before* the merge — used in the dry-run table so the
     reviewer can prioritise high-impact groups. `source` records who
     proposed the group (`builtin` / `file` / `llm`) for auditability.
     """
@@ -128,7 +128,7 @@ def build_groups(
     are returned — a singleton match means there's nothing to merge.
 
     `present` maps `company_name → headcount` and is the universe of
-    company names actually attached to people for the target owner.
+    company names actually attached to people in this database.
 
     Resolution rules when a name appears in multiple sources:
       - file > builtin (user override always wins)
@@ -139,7 +139,7 @@ def build_groups(
     claimed: set[str] = set()
 
     def _emit_group(canonical: str, members: Iterable[str], source: str) -> None:
-        # Filter to names that actually exist in the owner's roster, drop
+        # Filter to names that actually exist in the roster, drop
         # already-claimed ones, dedup. Skip empty / singleton results.
         present_members = [
             m for m in dict.fromkeys(members) if m in present and m not in claimed

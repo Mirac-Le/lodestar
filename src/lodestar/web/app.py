@@ -1,16 +1,59 @@
-"""FastAPI app exposing the network as a REST API + serving the SPA."""
+"""FastAPI app: mount-router for one-db-per-owner deployments.
+
+Layout
+------
+
+The process boots from ``serve --mount slug=path`` (or, if no
+``--mount`` flag is given, from ``--db`` / ``LODESTAR_DB_PATH``).
+Each mount becomes its **own** sub-application living under
+``/r/<slug>/`` with this surface:
+
+    /r/<slug>/              → SPA shell (index.html)
+    /r/<slug>/api/...       → all data endpoints scoped to that db file
+    /r/<slug>/api/unlock    → password challenge → HMAC token
+
+The root app exposes only:
+
+    /                       → SPA shell (the SPA reads /api/mounts to
+                              render owner tabs and pick a default tab)
+    /api/mounts             → list of mounted networks (display name,
+                              accent color, contact count, locked?)
+    /static/*               → shared static assets (one copy in memory)
+
+Why mount-per-app instead of one big app + path param: it lets every
+mount carry its own SQLite connection lifecycle and its own
+``unlock_secret`` without smearing per-request "which slug am I?"
+state through every dependency. A mount's ``Repository`` only ever
+sees its own db — the only place ``slug`` shows up in handler code is
+the unlock endpoint and the auth dependency.
+
+Auth model (切 tab 必输 = "G1")
+------------------------------
+
+Every locked mount challenges on the **first** call. The frontend
+never persists the unlock token across mounts (no localStorage write
+keyed by slug); switching tabs throws the in-memory token away and
+forces a fresh ``POST /r/<slug>/api/unlock``. The backend stays
+stateless — it only verifies that ``X-Mount-Unlock`` was minted with
+that mount's ``meta.unlock_secret`` and is still inside its TTL.
+Mounts with no password set return a token immediately (no challenge),
+which the SPA treats as "open tab, no password prompt".
+"""
 
 from __future__ import annotations
 
+import json
+import logging
+import os
 from collections import Counter
 from collections.abc import Iterator
 from contextlib import contextmanager
+from dataclasses import dataclass
 from pathlib import Path
-from typing import Annotated
 
 import networkx as nx
 from fastapi import Depends, FastAPI, Header, HTTPException, Query
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 
 from lodestar.config import get_settings
@@ -20,7 +63,6 @@ from lodestar.embedding import get_embedding_client
 from lodestar.llm import GoalParser, get_llm_client
 from lodestar.models import (
     GoalIntent,
-    Owner,
     PathResult,
     PathStep,
     Person,
@@ -29,11 +71,9 @@ from lodestar.models import (
 from lodestar.search import HybridSearch, PathFinder, build_reranker_from_settings
 from lodestar.viz.pyvis_export import infer_industry
 from lodestar.web import enrich_jobs
-from lodestar.web.owner_unlock import (
-    assert_owner_web_access,
+from lodestar.web.mount_unlock import (
+    assert_mount_access,
     mint_unlock_token,
-    unlock_secret_bytes,
-    verify_web_password,
 )
 from lodestar.web.schemas import (
     CreatePersonRequest,
@@ -46,10 +86,8 @@ from lodestar.web.schemas import (
     GraphPayload,
     IntroductionsResponse,
     IntroductionSuggestion,
-    OwnerDTO,
-    OwnersResponse,
-    OwnerUnlockRequest,
-    OwnerUnlockResponse,
+    MountDTO,
+    MountsResponse,
     PathResultDTO,
     PathStepDTO,
     PersonDTO,
@@ -65,6 +103,8 @@ from lodestar.web.schemas import (
     StatsResponse,
     TwoPersonPathRequest,
     TwoPersonPathResponse,
+    UnlockRequest,
+    UnlockResponse,
     UpdatePersonRequest,
 )
 from lodestar.web.schemas import (
@@ -72,9 +112,39 @@ from lodestar.web.schemas import (
 )
 
 STATIC_DIR = Path(__file__).parent / "static"
+_log = logging.getLogger(__name__)
 
 
-# --------------------------------------------------------------- helpers
+# =====================================================================
+# Mount registry
+# =====================================================================
+@dataclass(frozen=True)
+class MountSpec:
+    """A single ``--mount slug=path`` entry, validated at boot time."""
+
+    slug: str
+    db_path: Path
+
+
+def _load_mounts() -> list[MountSpec]:
+    """Read ``LODESTAR_MOUNTS_JSON`` (set by ``lodestar serve``) or fall
+    back to the global ``--db`` / ``LODESTAR_DB_PATH`` as a single
+    ``me`` mount.
+    """
+    raw = os.environ.get("LODESTAR_MOUNTS_JSON", "").strip()
+    if raw:
+        items = json.loads(raw)
+        return [
+            MountSpec(slug=m["slug"], db_path=Path(m["db_path"]).resolve())
+            for m in items
+        ]
+    default_path = Path(get_settings().db_path).resolve()
+    return [MountSpec(slug="me", db_path=default_path)]
+
+
+# =====================================================================
+# Helpers (pure render — no DB / mount knowledge baked in)
+# =====================================================================
 def _embed_text(p: Person) -> str:
     parts = [p.name]
     if p.bio:
@@ -164,8 +234,6 @@ def _relationship_to_dto(
     name_lookup: dict[int, str],
     me_id: int | None,
 ) -> RelationshipDTO | None:
-    """Render a Relationship row as a flat DTO. Returns None when either
-    endpoint isn't visible to the current owner (name_lookup miss)."""
     if rel.id is None:
         return None
     a_name = name_lookup.get(rel.source_id)
@@ -200,170 +268,132 @@ def _highlighted_elements(results: list[PathResult]) -> tuple[list[int], list[st
     return sorted(nodes), sorted(edges)
 
 
-# ------------------------------------------------------------- DB session
-@contextmanager
-def _open_repo() -> Iterator[Repository]:
-    settings = get_settings()
-    conn = connect(settings.db_path)
-    init_schema(conn, embedding_dim=settings.embedding_dim)
-    try:
-        yield Repository(conn)
-    finally:
-        conn.close()
+# =====================================================================
+# Per-mount sub-app factory
+# =====================================================================
+def _build_mount_app(spec: MountSpec) -> FastAPI:  # noqa: C901  (router-heavy)
+    """Build a self-contained FastAPI app for one db file.
 
-
-def get_repo() -> Iterator[Repository]:
-    with _open_repo() as repo:
-        yield repo
-
-
-def _resolve_owner(repo: Repository, slug: str | None) -> Owner:
-    """Pick the active owner from the optional `?owner=slug` query.
-
-    Falls back to the first owner (lowest position / id) when the
-    parameter is absent. Raises 400 if no owners exist at all and 404 if
-    the requested slug is unknown — both surface as actionable errors in
-    the SPA.
+    All endpoints are scoped to ``spec.db_path``; no request data ever
+    crosses to other mounts. The closure binds ``slug`` and ``db_path``
+    so the dependency chain doesn't have to thread them through.
     """
-    owners = repo.list_owners()
-    if not owners:
-        raise HTTPException(
-            400, "Database not initialised. Run `lodestar init` first."
-        )
-    if slug is None:
-        return owners[0]
-    for o in owners:
-        if o.slug == slug:
-            return o
-    raise HTTPException(404, f"Unknown owner '{slug}'.")
-
-
-def verified_owner(
-    owner: str | None = Query(None),
-    x_owner_unlock: str | None = Header(default=None, alias="X-Owner-Unlock"),
-    repo: Repository = Depends(get_repo),
-) -> Owner:
-    o = _resolve_owner(repo, owner)
-    assert_owner_web_access(o, x_owner_unlock, unlock_secret_bytes())
-    return o
-
-
-def _person_dto(repo: Repository, owner_obj: Owner, pid: int) -> PersonDTO:
-    person = repo.get_person(pid)
-    if person is None:
-        raise HTTPException(404, f"Person {pid} not found")
-    assert owner_obj.id is not None
-    me = repo.get_me(owner_id=owner_obj.id)
-    rels = repo.list_relationships(owner_id=owner_obj.id)
-    s2me = _strength_to_me(rels, me.id) if me and me.id else {}
-    if person.is_me:
-        industry, color, glow = "我", "#f7f8f8", "#9ca4ae"
-    else:
-        industry, color, glow = infer_industry(person)
-
-    related = []
-    for r in rels:
-        other_id = (
-            r.target_id if r.source_id == pid
-            else r.source_id if r.target_id == pid
-            else None
-        )
-        if other_id is None:
-            continue
-        other = repo.get_person(other_id)
-        if not other:
-            continue
-        related.append({
-            "id": other.id,
-            "name": other.name,
-            "strength": r.strength,
-            "context": r.context or "",
-            "frequency": r.frequency.value,
-        })
-    related.sort(key=lambda x: -x["strength"])  # type: ignore[arg-type, return-value]
-
-    return PersonDTO.from_person(
-        person, industry, color, glow,
-        s2me.get(pid), related,
+    slug = spec.slug
+    db_path = spec.db_path
+    sub = FastAPI(
+        title=f"Lodestar / {slug}",
+        version="0.4.0",
+        docs_url=None,  # share /docs at top-level if we ever add one
+        redoc_url=None,
     )
 
+    @contextmanager
+    def _open_repo() -> Iterator[Repository]:
+        settings = get_settings()
+        conn = connect(db_path)
+        init_schema(conn, embedding_dim=settings.embedding_dim)
+        try:
+            yield Repository(conn)
+        finally:
+            conn.close()
 
-# ---------------------------------------------------------------- app
-def create_app() -> FastAPI:
-    app = FastAPI(
-        title="Lodestar",
-        description="Personal network navigator API",
-        version="0.1.0",
-    )
+    def get_repo() -> Iterator[Repository]:
+        with _open_repo() as repo:
+            yield repo
 
-    # ---------- root → SPA
-    @app.get("/", include_in_schema=False)
+    def verified(
+        x_mount_unlock: str | None = Header(default=None, alias="X-Mount-Unlock"),
+        repo: Repository = Depends(get_repo),
+    ) -> Repository:
+        assert_mount_access(repo, slug, x_mount_unlock)
+        return repo
+
+    def _name_lookup(repo: Repository) -> tuple[dict[int, str], int | None]:
+        people = repo.list_people()
+        me = repo.get_me()
+        lookup: dict[int, str] = {p.id: p.name for p in people if p.id is not None}
+        me_id: int | None = None
+        if me is not None and me.id is not None:
+            lookup[me.id] = me.name
+            me_id = me.id
+        return lookup, me_id
+
+    def _person_dto(repo: Repository, pid: int) -> PersonDTO:
+        person = repo.get_person(pid)
+        if person is None:
+            raise HTTPException(404, f"Person {pid} not found")
+        me = repo.get_me()
+        rels = repo.list_relationships()
+        s2me = _strength_to_me(rels, me.id) if me and me.id else {}
+        if person.is_me:
+            industry, color, glow = "我", "#f7f8f8", "#9ca4ae"
+        else:
+            industry, color, glow = infer_industry(person)
+
+        related: list[dict] = []
+        for r in rels:
+            other_id = (
+                r.target_id if r.source_id == pid
+                else r.source_id if r.target_id == pid
+                else None
+            )
+            if other_id is None:
+                continue
+            other = repo.get_person(other_id)
+            if not other:
+                continue
+            related.append({
+                "id": other.id,
+                "name": other.name,
+                "strength": r.strength,
+                "context": r.context or "",
+                "frequency": r.frequency.value,
+            })
+        related.sort(key=lambda x: -x["strength"])  # type: ignore[arg-type, return-value]
+
+        return PersonDTO.from_person(
+            person, industry, color, glow,
+            s2me.get(pid), related,
+        )
+
+    # ---------- SPA shell -------------------------------------------------
+    @sub.get("/", include_in_schema=False)
     def index() -> FileResponse:
         return FileResponse(STATIC_DIR / "index.html")
 
-    if STATIC_DIR.exists():
-        app.mount(
-            "/static", StaticFiles(directory=str(STATIC_DIR)), name="static"
-        )
-
-    # ---------- owners
-    @app.get("/api/owners", response_model=OwnersResponse)
-    def list_owners(repo: Repository = Depends(get_repo)) -> OwnersResponse:
-        owners = repo.list_owners()
-        if not owners:
-            return OwnersResponse(owners=[], default_slug=None)
-        default_slug = owners[0].slug
-        out: list[OwnerDTO] = []
-        for o in owners:
-            assert o.id is not None
-            count = len(repo.list_people(owner_id=o.id))
-            out.append(OwnerDTO(
-                id=o.id, slug=o.slug, display_name=o.display_name,
-                me_person_id=o.me_person_id, accent_color=o.accent_color,
-                contact_count=count, is_default=(o.slug == default_slug),
-                web_locked=bool(o.web_password_hash),
-            ))
-        return OwnersResponse(owners=out, default_slug=default_slug)
-
-    @app.post("/api/owners/unlock", response_model=OwnerUnlockResponse)
-    def unlock_owner(
-        body: OwnerUnlockRequest,
+    # ---------- unlock ----------------------------------------------------
+    @sub.post("/api/unlock", response_model=UnlockResponse)
+    def unlock(
+        body: UnlockRequest,
         repo: Repository = Depends(get_repo),
-    ) -> OwnerUnlockResponse:
-        o = repo.get_owner_by_slug(body.slug)
-        if o is None:
-            raise HTTPException(404, f"Unknown owner '{body.slug}'.")
-        secret = unlock_secret_bytes()
-        if not o.web_password_hash:
-            return OwnerUnlockResponse(
-                token=mint_unlock_token(o.slug, secret),
+    ) -> UnlockResponse:
+        if not repo.web_password_hash:
+            return UnlockResponse(
+                token=mint_unlock_token(slug, repo.unlock_secret),
                 unlocked=True,
             )
-        if not verify_web_password(body.password, o.web_password_hash):
+        if not repo.verify_web_password(body.password):
             raise HTTPException(
                 401,
                 detail={"code": "bad_password", "message": "密码错误"},
             )
-        return OwnerUnlockResponse(
-            token=mint_unlock_token(o.slug, secret),
+        return UnlockResponse(
+            token=mint_unlock_token(slug, repo.unlock_secret),
             unlocked=True,
         )
 
-    # ---------- graph
-    @app.get("/api/graph", response_model=GraphPayload)
-    def get_graph(
-        owner_obj: Annotated[Owner, Depends(verified_owner)],
-        repo: Repository = Depends(get_repo),
-    ) -> GraphPayload:
-        assert owner_obj.id is not None
-        me = repo.get_me(owner_id=owner_obj.id)
+    # ---------- graph -----------------------------------------------------
+    @sub.get("/api/graph", response_model=GraphPayload)
+    def get_graph(repo: Repository = Depends(verified)) -> GraphPayload:
+        me = repo.get_me()
         if me is None or me.id is None:
-            raise HTTPException(400, "Owner has no `me` row; reseed the database.")
-        people = repo.list_people(owner_id=owner_obj.id)
-        rels = repo.list_relationships(owner_id=owner_obj.id)
+            raise HTTPException(400, "DB has no `me` row; run `lodestar init`.")
+        people = repo.list_people()
+        rels = repo.list_relationships()
         s2me = _strength_to_me(rels, me.id)
         nodes = [_to_graph_node(me, None)] + [
-            _to_graph_node(p, s2me.get(p.id) if p.id else None) for p in people
+            _to_graph_node(p, s2me.get(p.id) if p.id else None)
+            for p in people if not p.is_me
         ]
         edges = [
             GraphEdge(
@@ -378,16 +408,15 @@ def create_app() -> FastAPI:
         return GraphPayload(
             nodes=nodes, edges=edges, me_id=me.id,
             weak_me_floor=settings.weak_me_floor,
-            owner_slug=owner_obj.slug,
-            owner_display_name=owner_obj.display_name,
+            mount_slug=slug,
+            mount_display_name=repo.display_name or slug,
         )
 
-    # ---------- search
-    @app.post("/api/search", response_model=SearchResponse)
+    # ---------- search ----------------------------------------------------
+    @sub.post("/api/search", response_model=SearchResponse)
     def search(
         body: SearchRequest,
-        owner_obj: Annotated[Owner, Depends(verified_owner)],
-        repo: Repository = Depends(get_repo),
+        repo: Repository = Depends(verified),
     ) -> SearchResponse:
         if not body.goal.strip():
             raise HTTPException(400, "Empty goal")
@@ -407,9 +436,9 @@ def create_app() -> FastAPI:
             embedder = get_embedding_client()
         except Exception:
             embedder = None
-        candidates = HybridSearch(
-            repo=repo, embedder=embedder, owner_id=owner_obj.id,
-        ).search(intent, top_k=settings.top_k, recall_k=settings.reranker_recall_k)
+        candidates = HybridSearch(repo=repo, embedder=embedder).search(
+            intent, top_k=settings.top_k, recall_k=settings.reranker_recall_k
+        )
         if not candidates:
             return SearchResponse(
                 goal=body.goal, intent_summary=intent.summary,
@@ -419,34 +448,37 @@ def create_app() -> FastAPI:
         reranker = build_reranker_from_settings()
         candidates = reranker.rerank(intent, candidates, repo)[: settings.top_k]
         ranked = PathFinder(
-            repo=repo, max_hops=settings.max_hops, owner_id=owner_obj.id,
+            repo=repo, max_hops=settings.max_hops,
             weak_me_floor=settings.weak_me_floor,
         ).rank(candidates)
 
-        # Bucket purely by graph topology. Each bucket is independently
-        # truncated so direct contacts can't crowd indirect intros out of
-        # the UI, but no bucket gets a free pass into the autohighlight —
-        # `results` is sorted by combined_score across all buckets so the
-        # client can pick the global best regardless of kind.
+        # Two-bucket UI: indirect (multi-hop intros) + contacted (every
+        # 1-hop, sorted by strength). The frontend has been simplified
+        # to those two columns — anything else risks the silent Alpine
+        # `direct.length` regression we hit before.
         indirect = [r for r in ranked if r.path_kind == "indirect"][: body.top_k]
-        direct = [r for r in ranked if r.path_kind == "direct"][: body.top_k]
-        weak = [r for r in ranked if r.path_kind == "weak"][: max(body.top_k - 1, 2)]
+        contacted_pool = [
+            r for r in ranked if r.path_kind in ("direct", "weak")
+        ]
+        contacted_pool.sort(
+            key=lambda r: (
+                -(r.path[1].strength or 0) if len(r.path) > 1 else 0,
+                -r.combined_score,
+            )
+        )
+        contacted = contacted_pool[: body.top_k * 2]
 
         wishlist = [r for r in ranked if r.target.is_wishlist][: body.top_k]
 
-        # Combined list = global ranking (already sorted by combined_score).
-        # Truncate after merging buckets so we keep the strongest survivors.
-        bucket_union = {id(r): r for r in (indirect + direct + weak)}
+        bucket_union = {id(r): r for r in (indirect + contacted_pool)}
         combined = sorted(
             bucket_union.values(),
             key=lambda r: r.combined_score,
             reverse=True,
         )[: body.top_k]
-
         nodes, edges = _highlighted_elements(combined)
         indirect_dto = [_path_result_to_dto(r) for r in indirect]
-        direct_dto = [_path_result_to_dto(r) for r in direct]
-        weak_dto = [_path_result_to_dto(r) for r in weak]
+        contacted_dto = [_path_result_to_dto(r) for r in contacted]
         wishlist_dto = [_path_result_to_dto(r) for r in wishlist]
         return SearchResponse(
             goal=body.goal,
@@ -454,34 +486,27 @@ def create_app() -> FastAPI:
             intent_keywords=intent.keywords,
             results=[_path_result_to_dto(r) for r in combined],
             indirect=indirect_dto,
-            direct=direct_dto,
-            weak=weak_dto,
+            contacted=contacted_dto,
             wishlist=wishlist_dto,
-            targets=indirect_dto,  # deprecated alias
             highlighted_node_ids=nodes,
             highlighted_edge_ids=edges,
         )
 
-    # ---------- person detail
-    @app.get("/api/people/{pid}", response_model=PersonDTO)
+    # ---------- person CRUD -----------------------------------------------
+    @sub.get("/api/people/{pid}", response_model=PersonDTO)
     def get_person(
-        pid: int,
-        owner_obj: Annotated[Owner, Depends(verified_owner)],
-        repo: Repository = Depends(get_repo),
+        pid: int, repo: Repository = Depends(verified)
     ) -> PersonDTO:
-        return _person_dto(repo, owner_obj, pid)
+        return _person_dto(repo, pid)
 
-    # ---------- create
-    @app.post("/api/people", response_model=PersonDTO)
+    @sub.post("/api/people", response_model=PersonDTO)
     def create_person(
         body: CreatePersonRequest,
-        owner_obj: Annotated[Owner, Depends(verified_owner)],
-        repo: Repository = Depends(get_repo),
+        repo: Repository = Depends(verified),
     ) -> PersonDTO:
-        assert owner_obj.id is not None
-        me = repo.get_me(owner_id=owner_obj.id)
+        me = repo.get_me()
         if me is None or me.id is None:
-            raise HTTPException(400, "Owner has no `me` row.")
+            raise HTTPException(400, "Run `lodestar init` first.")
         person = Person(
             name=body.name, bio=body.bio, notes=body.notes,
             tags=body.tags, skills=body.skills, companies=body.companies,
@@ -490,13 +515,12 @@ def create_app() -> FastAPI:
         )
         saved = repo.add_person(person)
         assert saved.id is not None
-        repo.attach_person_to_owner(saved.id, owner_obj.id)
         repo.add_relationship(Relationship(
             source_id=me.id, target_id=saved.id,
             strength=body.strength_to_me,
             context=body.relation_context,
             frequency=body.frequency,
-        ), owner_id=owner_obj.id)
+        ))
         if body.embed and saved.bio:
             try:
                 vec = get_embedding_client().embed(_embed_text(saved))
@@ -508,12 +532,10 @@ def create_app() -> FastAPI:
             saved, industry, color, glow, body.strength_to_me, [],
         )
 
-    # ---------- update
-    @app.patch("/api/people/{pid}", response_model=PersonDTO)
+    @sub.patch("/api/people/{pid}", response_model=PersonDTO)
     def update_person(
         pid: int, body: UpdatePersonRequest,
-        owner_obj: Annotated[Owner, Depends(verified_owner)],
-        repo: Repository = Depends(get_repo),
+        repo: Repository = Depends(verified),
     ) -> PersonDTO:
         existing = repo.get_person(pid)
         if existing is None:
@@ -541,23 +563,23 @@ def create_app() -> FastAPI:
                 repo.upsert_embedding(pid, vec)
             except Exception:
                 pass
-        return _person_dto(repo, owner_obj, pid)
+        return _person_dto(repo, pid)
 
-    # ---------- delete
-    @app.delete("/api/people/{pid}")
-    def delete_person(pid: int, repo: Repository = Depends(get_repo)) -> dict:
+    @sub.delete("/api/people/{pid}")
+    def delete_person(
+        pid: int, repo: Repository = Depends(verified)
+    ) -> dict:
         repo.delete_person(pid)
         return {"deleted": pid}
 
-    # ---------- two-person path
-    @app.post("/api/path", response_model=TwoPersonPathResponse)
+    # ---------- two-person path ------------------------------------------
+    @sub.post("/api/path", response_model=TwoPersonPathResponse)
     def find_paths(
         body: TwoPersonPathRequest,
-        owner_obj: Annotated[Owner, Depends(verified_owner)],
-        repo: Repository = Depends(get_repo),
+        repo: Repository = Depends(verified),
     ) -> TwoPersonPathResponse:
         settings = get_settings()
-        rels = repo.list_relationships(owner_id=owner_obj.id)
+        rels = repo.list_relationships()
         g: nx.Graph = nx.Graph()
         for r in rels:
             g.add_edge(
@@ -610,13 +632,12 @@ def create_app() -> FastAPI:
         results.sort(key=lambda r: r.combined_score, reverse=True)
         return TwoPersonPathResponse(paths=results[: body.max_paths])
 
-    # ---------- introductions you could broker
-    @app.get("/api/introductions", response_model=IntroductionsResponse)
+    # ---------- introductions you could broker ---------------------------
+    @sub.get("/api/introductions", response_model=IntroductionsResponse)
     def introductions(
-        owner_obj: Annotated[Owner, Depends(verified_owner)],
-        repo: Repository = Depends(get_repo),
+        repo: Repository = Depends(verified),
     ) -> IntroductionsResponse:
-        people = repo.list_people(owner_id=owner_obj.id)
+        people = repo.list_people()
         suggestions: list[IntroductionSuggestion] = []
         for seeker in people:
             if not seeker.needs:
@@ -653,30 +674,21 @@ def create_app() -> FastAPI:
                             ),
                         ))
                         break
-        # cap output
         return IntroductionsResponse(suggestions=suggestions[:50])
 
-    # ---------- enrich (LLM-based attribute extraction)
-    @app.post("/api/enrich/preview", response_model=EnrichDiff)
+    # ---------- enrich (LLM extraction) ----------------------------------
+    @sub.post("/api/enrich/preview", response_model=EnrichDiff)
     def enrich_preview(
         body: EnrichPreviewRequest,
-        owner_obj: Annotated[Owner, Depends(verified_owner)],
-        repo: Repository = Depends(get_repo),
+        repo: Repository = Depends(verified),
     ) -> EnrichDiff:
-        """A: 添加联系人对话框里的"AI 解析背景"按钮入口。
-
-        Anonymizes any in-table names mentioned in the input, calls the
-        LLM, returns the proposed structured fields. Does NOT write to
-        the DB — the SPA fills the chips and the user clicks 保存 next.
-        """
         from lodestar.enrich import L1Extractor, LLMClient, LLMError
 
-        assert owner_obj.id is not None
         try:
             client = LLMClient()
         except LLMError as exc:
             raise HTTPException(503, str(exc)) from exc
-        extractor = L1Extractor(repo, owner_id=owner_obj.id, client=client)
+        extractor = L1Extractor(repo, client=client)
         try:
             result = extractor.extract_for_input(
                 name=body.name,
@@ -698,18 +710,12 @@ def create_app() -> FastAPI:
             error=result.error,
         )
 
-    @app.post("/api/enrich/person/{pid}", response_model=PersonDTO)
+    @sub.post("/api/enrich/person/{pid}", response_model=PersonDTO)
     def enrich_person(
         pid: int,
-        owner_obj: Annotated[Owner, Depends(verified_owner)],
+        repo: Repository = Depends(verified),
         only_missing: bool = Query(True),
-        repo: Repository = Depends(get_repo),
     ) -> PersonDTO:
-        """C: 联系人详情面板里的"AI 重新解析"按钮入口。
-
-        only_missing=True (默认): 只在 companies/cities 为空时跑 LLM；
-        only_missing=False: 强制重跑并合并新结果到已有字段（不会删除已有值）。
-        """
         from lodestar.enrich import L1Extractor, LLMClient, LLMError
 
         person = repo.get_person(pid)
@@ -718,41 +724,27 @@ def create_app() -> FastAPI:
         if person.is_me:
             raise HTTPException(400, "不能对 me 节点跑 enrich")
 
-        assert owner_obj.id is not None
-
         if only_missing and bool(person.companies) and bool(person.cities):
-            # Nothing to do; just return the existing person.
-            return _person_dto(repo, owner_obj, pid)
+            return _person_dto(repo, pid)
 
         try:
             client = LLMClient()
         except LLMError as exc:
             raise HTTPException(503, str(exc)) from exc
-        extractor = L1Extractor(repo, owner_id=owner_obj.id, client=client)
+        extractor = L1Extractor(repo, client=client)
         try:
             diff = extractor.extract_for_person(person)
         except LLMError as exc:
             raise HTTPException(502, f"LLM 调用失败：{exc}") from exc
         if not diff.error and not diff.is_empty():
             extractor.apply([diff])
-        return _person_dto(repo, owner_obj, pid)
+        return _person_dto(repo, pid)
 
-    @app.post("/api/enrich/owner", response_model=EnrichJobState)
-    def enrich_owner_start(
+    @sub.post("/api/enrich/start", response_model=EnrichJobState)
+    def enrich_start(
         body: EnrichJobStartRequest,
-        owner_obj: Annotated[Owner, Depends(verified_owner)],
-        repo: Repository = Depends(get_repo),
+        _verified: Repository = Depends(verified),
     ) -> EnrichJobState:
-        """D: 顶栏"批量 AI 解析"入口。
-
-        非阻塞地启动后台 worker。若该 owner 已有任务在跑，返回现存
-        task_id（不会并行启动两个）。前端用 GET /api/enrich/status/{id}
-        每 2 秒拉一次进度。
-        """
-        assert owner_obj.id is not None
-        # Ensure the LLM client can be constructed before launching the
-        # worker — otherwise the user would only see the failure via
-        # polling.
         from lodestar.enrich import LLMClient, LLMError
 
         try:
@@ -760,56 +752,39 @@ def create_app() -> FastAPI:
         except LLMError as exc:
             raise HTTPException(503, str(exc)) from exc
         state = enrich_jobs.start(
-            owner_id=owner_obj.id,
-            owner_slug=owner_obj.slug,
+            mount_slug=slug,
+            db_path=db_path,
             only_missing=body.only_missing,
         )
         return EnrichJobState(**state.to_dict())
 
-    @app.get("/api/enrich/status/{task_id}", response_model=EnrichJobState)
-    def enrich_status(task_id: str) -> EnrichJobState:
+    @sub.get("/api/enrich/status/{task_id}", response_model=EnrichJobState)
+    def enrich_status(
+        task_id: str,
+        _verified: Repository = Depends(verified),
+    ) -> EnrichJobState:
         state = enrich_jobs.get(task_id)
-        if state is None:
+        if state is None or state.mount_slug != slug:
             raise HTTPException(404, f"Unknown enrich task '{task_id}'")
         return EnrichJobState(**state.to_dict())
 
-    # ---------- relationships (browse / NL parse / apply / edit)
-
-    def _owner_name_lookup(
-        repo: Repository, owner_id: int
-    ) -> tuple[dict[int, str], int | None]:
-        """{person_id: name} for everyone visible to this owner, plus
-        that owner's me_id (None if missing)."""
-        people = repo.list_people(owner_id=owner_id)
-        me = repo.get_me(owner_id=owner_id)
-        lookup: dict[int, str] = {p.id: p.name for p in people if p.id is not None}
-        me_id: int | None = None
-        if me is not None and me.id is not None:
-            lookup[me.id] = me.name
-            me_id = me.id
-        return lookup, me_id
-
-    @app.get("/api/relationships", response_model=RelationshipListResponse)
+    # ---------- relationships --------------------------------------------
+    @sub.get("/api/relationships", response_model=RelationshipListResponse)
     def list_relationships_endpoint(
-        owner_obj: Annotated[Owner, Depends(verified_owner)],
+        repo: Repository = Depends(verified),
         q: str | None = Query(None),
         min_strength: int | None = Query(None, ge=1, le=5),
         source: str | None = Query(
             None,
             description="Comma-separated subset of {manual,colleague_inferred,ai_inferred}",
         ),
-        include_me: bool = Query(
-            True,
-            description="If False, drop edges that touch the owner's me node.",
-        ),
-        person_id: int | None = Query(None, description="Only edges touching this person."),
+        include_me: bool = Query(True),
+        person_id: int | None = Query(None),
         offset: int = Query(0, ge=0),
         limit: int = Query(100, ge=1, le=500),
-        repo: Repository = Depends(get_repo),
     ) -> RelationshipListResponse:
-        assert owner_obj.id is not None
-        name_lookup, me_id = _owner_name_lookup(repo, owner_obj.id)
-        rels = repo.list_relationships(owner_id=owner_obj.id)
+        name_lookup, me_id = _name_lookup(repo)
+        rels = repo.list_relationships()
 
         sources_filter: set[str] | None = None
         if source:
@@ -837,7 +812,6 @@ def create_app() -> FastAPI:
                 continue
             items.append(dto)
 
-        # Stable sort: me-edges first, then strength desc, then a_name.
         items.sort(
             key=lambda x: (
                 0 if (x.a_is_me or x.b_is_me) else 1,
@@ -852,31 +826,26 @@ def create_app() -> FastAPI:
             items=paged, total=total, offset=offset, limit=limit
         )
 
-    @app.post("/api/relationships/parse", response_model=RelationshipParseResponse)
+    @sub.post("/api/relationships/parse", response_model=RelationshipParseResponse)
     def parse_relationships(
         body: RelationshipParseRequest,
-        owner_obj: Annotated[Owner, Depends(verified_owner)],
-        repo: Repository = Depends(get_repo),
+        repo: Repository = Depends(verified),
     ) -> RelationshipParseResponse:
-        """NL → 关系提案。不写库，只返回提案 + 上下文，让前端确认。"""
         from lodestar.enrich import LLMClient, LLMError, RelationshipParser
 
-        assert owner_obj.id is not None
         try:
             client = LLMClient()
         except LLMError as exc:
             raise HTTPException(503, str(exc)) from exc
-        parser = RelationshipParser(repo, owner_id=owner_obj.id, client=client)
+        parser = RelationshipParser(repo, client=client)
         result = parser.parse(body.text)
 
         if result.error and not result.proposals and not result.unknown_mentions:
             return RelationshipParseResponse(error=result.error)
 
-        name_lookup, me_id = _owner_name_lookup(repo, owner_obj.id)
-        all_rels = repo.list_relationships(owner_id=owner_obj.id)
-        # 索引现有边方便 O(1) 查 existing_edge：键用无序对。
+        name_lookup, me_id = _name_lookup(repo)
+        all_rels = repo.list_relationships()
         edge_index: dict[tuple[int, int], RelationshipDTO] = {}
-        # 同时按人聚合所有现有边，用于 context_for。
         by_person: dict[int, list[RelationshipDTO]] = {}
         for r in all_rels:
             dto = _relationship_to_dto(r, name_lookup, me_id)
@@ -916,17 +885,17 @@ def create_app() -> FastAPI:
             error=result.error,
         )
 
-    @app.post(
-        "/api/relationships/apply", response_model=RelationshipApplyResponse
-    )
+    @sub.post("/api/relationships/apply", response_model=RelationshipApplyResponse)
     def apply_relationships(
         body: RelationshipApplyRequest,
-        owner_obj: Annotated[Owner, Depends(verified_owner)],
-        repo: Repository = Depends(get_repo),
+        repo: Repository = Depends(verified),
     ) -> RelationshipApplyResponse:
-        assert owner_obj.id is not None
-        owner_pids = repo.list_owner_person_ids(owner_obj.id)
-        name_lookup, me_id = _owner_name_lookup(repo, owner_obj.id)
+        people = repo.list_people()
+        visible_pids = {p.id for p in people if p.id is not None}
+        me = repo.get_me()
+        if me is not None and me.id is not None:
+            visible_pids.add(me.id)
+        name_lookup, me_id = _name_lookup(repo)
 
         applied = 0
         skipped = 0
@@ -935,8 +904,7 @@ def create_app() -> FastAPI:
             if item.a_id == item.b_id:
                 skipped += 1
                 continue
-            # owner 隔离：两端必须都在该 owner 的可见集合里（或是该 owner 的 me）。
-            if item.a_id not in owner_pids or item.b_id not in owner_pids:
+            if item.a_id not in visible_pids or item.b_id not in visible_pids:
                 skipped += 1
                 continue
             rel = Relationship(
@@ -947,7 +915,7 @@ def create_app() -> FastAPI:
                 frequency=item.frequency,
                 source="manual",
             )
-            saved = repo.add_relationship(rel, owner_id=owner_obj.id)
+            saved = repo.add_relationship(rel)
             applied += 1
             dto = _relationship_to_dto(saved, name_lookup, me_id)
             if dto is not None:
@@ -956,20 +924,16 @@ def create_app() -> FastAPI:
             applied=applied, skipped=skipped, items=out_dtos
         )
 
-    @app.patch(
-        "/api/relationships/{rel_id}", response_model=RelationshipDTO
-    )
+    @sub.patch("/api/relationships/{rel_id}", response_model=RelationshipDTO)
     def update_relationship(
         rel_id: int,
         body: RelationshipUpdateRequest,
-        owner_obj: Annotated[Owner, Depends(verified_owner)],
-        repo: Repository = Depends(get_repo),
+        repo: Repository = Depends(verified),
     ) -> RelationshipDTO:
-        assert owner_obj.id is not None
-        rels = repo.list_relationships(owner_id=owner_obj.id)
+        rels = repo.list_relationships()
         target = next((r for r in rels if r.id == rel_id), None)
         if target is None:
-            raise HTTPException(404, f"Relationship {rel_id} not found in this owner.")
+            raise HTTPException(404, f"Relationship {rel_id} not found.")
         new_rel = Relationship(
             id=target.id,
             source_id=target.source_id,
@@ -977,40 +941,34 @@ def create_app() -> FastAPI:
             strength=body.strength if body.strength is not None else target.strength,
             context=body.context if body.context is not None else target.context,
             frequency=body.frequency if body.frequency is not None else target.frequency,
-            source="manual",  # 任何手工编辑都标记为 manual
+            source="manual",
         )
-        saved = repo.add_relationship(new_rel, owner_id=owner_obj.id)
-        name_lookup, me_id = _owner_name_lookup(repo, owner_obj.id)
+        saved = repo.add_relationship(new_rel)
+        name_lookup, me_id = _name_lookup(repo)
         dto = _relationship_to_dto(saved, name_lookup, me_id)
         if dto is None:
             raise HTTPException(500, "Failed to render updated relationship.")
         return dto
 
-    @app.delete("/api/relationships/{rel_id}")
+    @sub.delete("/api/relationships/{rel_id}")
     def delete_relationship(
         rel_id: int,
-        owner_obj: Annotated[Owner, Depends(verified_owner)],
-        repo: Repository = Depends(get_repo),
+        repo: Repository = Depends(verified),
     ) -> dict:
-        assert owner_obj.id is not None
-        rels = repo.list_relationships(owner_id=owner_obj.id)
+        rels = repo.list_relationships()
         target = next((r for r in rels if r.id == rel_id), None)
         if target is None:
-            raise HTTPException(404, f"Relationship {rel_id} not found in this owner.")
+            raise HTTPException(404, f"Relationship {rel_id} not found.")
         with repo.conn:
             repo.conn.execute("DELETE FROM relationship WHERE id = ?", (rel_id,))
         return {"deleted": rel_id}
 
-    # ---------- stats
-    @app.get("/api/stats", response_model=StatsResponse)
-    def stats(
-        owner_obj: Annotated[Owner, Depends(verified_owner)],
-        repo: Repository = Depends(get_repo),
-    ) -> StatsResponse:
-        assert owner_obj.id is not None
-        people = repo.list_people(owner_id=owner_obj.id)
-        rels = repo.list_relationships(owner_id=owner_obj.id)
-        me = repo.get_me(owner_id=owner_obj.id)
+    # ---------- stats -----------------------------------------------------
+    @sub.get("/api/stats", response_model=StatsResponse)
+    def stats(repo: Repository = Depends(verified)) -> StatsResponse:
+        people = repo.list_people()
+        rels = repo.list_relationships()
+        me = repo.get_me()
         s2me = _strength_to_me(rels, me.id) if me and me.id else {}
 
         ind_counter: Counter[str] = Counter()
@@ -1041,7 +999,73 @@ def create_app() -> FastAPI:
             top_cities=city_counter.most_common(8),
         )
 
-    return app
+    return sub
 
 
-__all__ = ["create_app", "get_repo"]
+# =====================================================================
+# Root app
+# =====================================================================
+def create_app() -> FastAPI:
+    """Build the root FastAPI app with one mounted sub-app per ``--mount``."""
+    mounts = _load_mounts()
+    if not mounts:
+        raise RuntimeError(
+            "No mounts configured. Run `lodestar serve` (which seeds "
+            "`LODESTAR_MOUNTS_JSON`) or set `--mount` / `--db`."
+        )
+
+    # Build the per-mount registry up front so /api/mounts can read
+    # display_name / lock-state without lazy-init mid-request.
+    mount_meta: list[MountDTO] = []
+    settings = get_settings()
+    for spec in mounts:
+        conn = connect(spec.db_path)
+        try:
+            init_schema(conn, embedding_dim=settings.embedding_dim)
+            repo = Repository(conn)
+            people = repo.list_people()
+            me = repo.get_me()
+            mount_meta.append(MountDTO(
+                slug=spec.slug,
+                display_name=repo.display_name or spec.slug,
+                me_person_id=me.id if me else None,
+                accent_color=repo.accent_color,
+                contact_count=len(people),
+                locked=bool(repo.web_password_hash),
+            ))
+        finally:
+            conn.close()
+
+    root = FastAPI(
+        title="Lodestar",
+        description="Personal network navigator (one db per owner).",
+        version="0.4.0",
+    )
+
+    # Mount each sub-app at /r/<slug>
+    for spec in mounts:
+        sub_app = _build_mount_app(spec)
+        root.mount(f"/r/{spec.slug}", sub_app)
+        _log.info("mounted /r/%s → %s", spec.slug, spec.db_path)
+
+    # Shared static assets (one copy in memory regardless of mount count)
+    if STATIC_DIR.exists():
+        root.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
+
+    @root.get("/api/mounts", response_model=MountsResponse)
+    def list_mounts() -> MountsResponse:
+        default = mount_meta[0].slug if mount_meta else None
+        return MountsResponse(mounts=mount_meta, default_slug=default)
+
+    @root.get("/", include_in_schema=False, response_model=None)
+    def index() -> FileResponse | RedirectResponse:
+        # Single-mount setups skip the "pick a network" view entirely
+        # and drop the user straight into the only network they have.
+        if len(mount_meta) == 1:
+            return RedirectResponse(f"/r/{mount_meta[0].slug}/")
+        return FileResponse(STATIC_DIR / "index.html")
+
+    return root
+
+
+__all__ = ["create_app"]

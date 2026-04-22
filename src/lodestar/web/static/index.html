@@ -4,39 +4,48 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1">
   <title>Lodestar — Personal Network Navigator</title>
-  <link rel="stylesheet" href="/static/style.css?v=20260422-l2-todo">
+  <link rel="stylesheet" href="/static/style.css?v=20260422-onelib">
   <script src="/static/cytoscape.min.js"></script>
   <script src="/static/echarts.min.js"></script>
-  <script defer src="/static/app.js?v=20260422-l2-todo"></script>
+  <script defer src="/static/app.js?v=20260422-onelib"></script>
   <script defer src="/static/alpine.min.js"></script>
 </head>
 <body x-data="appState()" x-init="init()" :class="searching ? 'searching' : ''">
 
-  <template x-if="showOwnerUnlockModal">
-    <div class="modal-bg owner-unlock-bg">
-      <div class="modal owner-unlock-modal" @click.stop>
+  <!-- ============================================================
+       Mount unlock modal (一人一库 / 切 tab 必重输)
+       ============================================================ -->
+  <template x-if="showUnlockModal">
+    <div class="modal-bg mount-unlock-bg">
+      <div class="modal mount-unlock-modal" @click.stop>
+        <div class="unlock-icon" aria-hidden="true">
+          <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
+            <rect x="4" y="11" width="16" height="10" rx="2"/>
+            <path d="M8 11V7a4 4 0 0 1 8 0v4"/>
+          </svg>
+        </div>
         <h2>解锁网络</h2>
-        <p>
-          <span class="mono" x-text="ownerUnlockSlug"></span>
-          已设置网页密码，请输入后继续。
+        <p class="unlock-subtitle">
+          <span class="mono" x-text="mount?.display_name || mountSlug"></span>
+          <span class="unlock-sep">·</span>
+          <span class="unlock-hint">每次切换标签都需要重新输入密码</span>
         </p>
         <div class="field">
-          <label for="owner-unlock-pw">密码</label>
-          <input id="owner-unlock-pw" type="password"
-                 x-model="ownerUnlockPassword"
-                 @keydown.enter="submitOwnerUnlock()"
+          <input id="mount-unlock-pw" type="password"
+                 x-model="unlockPassword"
+                 @keydown.enter="submitUnlock()"
                  autocomplete="current-password"
                  placeholder="输入密码">
         </div>
-        <template x-if="ownerUnlockError">
-          <p class="unlock-error" x-text="ownerUnlockError"></p>
+        <template x-if="unlockError">
+          <p class="unlock-error" x-text="unlockError"></p>
         </template>
         <div class="modal-actions">
-          <button type="button" class="btn" @click="cancelOwnerUnlock()">取消</button>
+          <button type="button" class="btn" @click="cancelUnlock()">取消</button>
           <button type="button" class="btn primary"
-                  :disabled="ownerUnlockBusy"
-                  @click="submitOwnerUnlock()">
-            <span x-text="ownerUnlockBusy ? '校验中…' : '解锁'"></span>
+                  :disabled="unlockBusy"
+                  @click="submitUnlock()">
+            <span x-text="unlockBusy ? '校验中…' : '解锁'"></span>
           </button>
         </div>
       </div>
@@ -104,20 +113,29 @@
   <div class="topbar">
     <div class="brand"><span class="brand-mark" aria-hidden="true"></span>Lodestar</div>
 
-    <!-- Owner segmented tab: switches between Richard / Tommy / ... -->
-    <template x-if="owners.length > 1">
-      <div class="owner-tabs" role="tablist" aria-label="切换网络主人">
-        <template x-for="o in owners" :key="o.slug">
+    <!-- Mount tabs: switch between Richard / Tommy / ...; full-page
+         reload guarantees the unlock token is dropped (切 tab 必重输). -->
+    <template x-if="mounts.length > 1">
+      <div class="mount-tabs" role="tablist" aria-label="切换网络">
+        <template x-for="m in mounts" :key="m.slug">
           <button
             type="button"
             role="tab"
-            class="owner-tab"
-            :class="{ 'is-active': owner === o.slug }"
-            :aria-selected="owner === o.slug"
-            @click="switchOwner(o.slug)">
-            <span class="owner-name" x-text="o.display_name"></span>
-            <span class="owner-lock" x-show="o.web_locked" title="已设置网页密码">锁</span>
-            <span class="owner-count" x-text="o.contact_count"></span>
+            class="mount-tab"
+            :class="{ 'is-active': mountSlug === m.slug, 'is-locked': m.locked }"
+            :aria-selected="mountSlug === m.slug"
+            :title="m.locked ? '已设置网页密码（切到此标签需重输）' : ''"
+            @click="switchMount(m.slug)">
+            <template x-if="m.locked">
+              <svg class="mount-lock" width="11" height="11" viewBox="0 0 24 24"
+                   fill="none" stroke="currentColor" stroke-width="2"
+                   stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                <rect x="4" y="11" width="16" height="10" rx="2"/>
+                <path d="M8 11V7a4 4 0 0 1 8 0v4"/>
+              </svg>
+            </template>
+            <span class="mount-name" x-text="m.display_name"></span>
+            <span class="mount-count" x-text="m.contact_count"></span>
           </button>
         </template>
       </div>
@@ -164,11 +182,11 @@
     </button>
     <button class="btn" @click="toggleRelationsDrawer()"
             :class="{ 'is-active': showRelationsDrawer }"
-            title="浏览/编辑当前 owner 的全部关系">
+            title="浏览/编辑当前网络的全部关系">
       <span style="font-weight: 600; letter-spacing: .02em;">关系</span>
     </button>
     <button class="btn" @click="openBatchEnrich()"
-            title="对当前 owner 下所有联系人做 AI 解析（缺字段才跑）">
+            title="对当前网络下所有联系人做 AI 解析（缺字段才跑）">
       <span style="font-weight: 600; letter-spacing: .02em;">AI 解析</span>
     </button>
     <button class="btn icon-only" @click="showHelp = true" title="快捷键 (?)">?</button>
@@ -619,7 +637,7 @@
       <div class="modal">
         <h2>批量 AI 解析</h2>
         <p>
-          对 <span x-text="ownerLabel(owner)"></span> 名下所有联系人跑一次结构化解析。
+          对 <span x-text="mountLabel(mountSlug)"></span> 名下所有联系人跑一次结构化解析。
           姓名会先在本地脱敏成 <span style="font-family: var(--font-mono, monospace);">P001/P002…</span>
           再发到云端 LLM，结果回到本地后只做<strong>追加</strong>，不会删除已有字段。
         </p>

@@ -2,12 +2,17 @@
 
 We mock `LLMClient.chat_json` so the parse endpoint runs end-to-end
 against the real anonymizer + repository, but never touches the network.
-The list / apply / patch / delete endpoints don't touch the LLM at all,
-so they exercise pure DB + DTO logic.
+The list / apply / patch / delete endpoints don't touch the LLM at all.
+
+一人一库后，"isolation" 不再是 endpoint query 参数，而是 mount 前缀。
+两个 owner 各自拥有独立 db，跨 owner 的边在数据上根本不可达，所以这里
+只针对 *单个 mount* 的 list/parse/apply/patch/delete 行为做断言；跨
+mount 的隔离已由 ``test_mount_unlock`` 覆盖。
 """
 
 from __future__ import annotations
 
+import json
 from collections.abc import Iterator
 from pathlib import Path
 from typing import Any
@@ -21,8 +26,10 @@ from lodestar.enrich.client import LLMCallResult
 from lodestar.models import Frequency, Person, Relationship
 from lodestar.web import create_app
 
+MOUNT = "r"
+PFX = f"/r/{MOUNT}"
 
-# ---------- helpers ---------------------------------------------------------
+
 class _FakeLLMClient:
     """Drop-in replacement for `enrich.LLMClient` with canned responses."""
 
@@ -30,8 +37,7 @@ class _FakeLLMClient:
     last_user: str | None = None
 
     def __init__(self, *_: Any, **__: Any) -> None:
-        # The real one validates env vars in __init__; we explicitly do
-        # nothing so tests don't need LODESTAR_LLM_API_KEY.
+        # Real client validates env vars in __init__; tests must not.
         pass
 
     def chat_json(self, *, system: str, user: str, temperature: float = 0.1) -> LLMCallResult:
@@ -40,9 +46,9 @@ class _FakeLLMClient:
 
 
 @pytest.fixture
-def setup(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Iterator[
-    tuple[TestClient, dict[str, int]]
-]:
+def setup(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> Iterator[tuple[TestClient, dict[str, int]]]:
     db: Path = tmp_path / "rel_web.db"
     test_settings = Settings(
         db_path=db,
@@ -52,96 +58,91 @@ def setup(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Iterator[
     )
     monkeypatch.setattr("lodestar.config.get_settings", lambda: test_settings)
     monkeypatch.setattr("lodestar.web.app.get_settings", lambda: test_settings)
+    monkeypatch.setenv(
+        "LODESTAR_MOUNTS_JSON",
+        json.dumps([{"slug": MOUNT, "db_path": str(db)}]),
+    )
 
     conn = connect(db)
     init_schema(conn, embedding_dim=8)
     repo = Repository(conn)
-    r = repo.ensure_owner(slug="r", display_name="Richard")
-    t = repo.ensure_owner(slug="t", display_name="Tommy")
-    assert r.id is not None and t.id is not None
+    me = repo.ensure_me("Richard")
+    assert me.id is not None
+    pids: dict[str, int] = {"me": me.id}
+    for n in ("Alice", "Bob", "Carol", "Dan"):
+        p = repo.add_person(Person(name=n))
+        assert p.id is not None
+        pids[n] = p.id
 
-    pids: dict[str, int] = {"me_r": r.me_person_id, "me_t": t.me_person_id}
-    for slug_prefix, owner_id, names in [
-        ("r", r.id, ["RAlice", "RBob"]),
-        ("t", t.id, ["TCarol", "TDan"]),
-    ]:
-        for n in names:
-            p = repo.add_person(Person(name=n))
-            assert p.id is not None
-            repo.attach_person_to_owner(p.id, owner_id)
-            pids[n] = p.id
-    # Seed: one me-edge in R, one peer-edge in T (manual + ai_inferred).
+    # One me-edge (Richard ↔ Alice, manual) + one peer-edge (Carol ↔ Dan,
+    # ai_inferred). 给后续 list / patch / delete 用例用。
     repo.add_relationship(
         Relationship(
-            source_id=r.me_person_id,
-            target_id=pids["RAlice"],
+            source_id=me.id,
+            target_id=pids["Alice"],
             strength=4,
             frequency=Frequency.MONTHLY,
             context="老同事",
             source="manual",
         ),
-        owner_id=r.id,
     )
     repo.add_relationship(
         Relationship(
-            source_id=pids["TCarol"],
-            target_id=pids["TDan"],
+            source_id=pids["Carol"],
+            target_id=pids["Dan"],
             strength=2,
             frequency=Frequency.YEARLY,
             source="ai_inferred",
         ),
-        owner_id=t.id,
     )
     conn.close()
 
-    # Patch the LLMClient and RelationshipParser entry points used inside
-    # `parse_relationships`. We import the module symbol *at module top*
-    # because the endpoint does `from lodestar.enrich import ...` at call
-    # time — patching the source symbol makes the in-function import see
-    # the fake.
+    # Patch the LLMClient symbol the endpoint imports lazily (`from
+    # lodestar.enrich import LLMClient` inside the route).
     monkeypatch.setattr("lodestar.enrich.LLMClient", _FakeLLMClient)
 
     client = TestClient(create_app())
     try:
         yield client, pids
     finally:
-        # Reset class-level state so tests don't bleed.
         _FakeLLMClient.next_response = {"edges": [], "unknown_mentions": []}
         _FakeLLMClient.last_user = None
 
 
 # ---------- /api/relationships (GET) ---------------------------------------
-def test_list_filters_by_owner(setup: tuple[TestClient, dict[str, int]]) -> None:
+def test_list_returns_seeded_edges(
+    setup: tuple[TestClient, dict[str, int]],
+) -> None:
     client, _ = setup
-    rs = client.get("/api/relationships?owner=r").json()
-    rt = client.get("/api/relationships?owner=t").json()
-    assert rs["total"] == 1
-    assert rt["total"] == 1
-    assert rs["items"][0]["b_name"] == "RAlice"
-    assert rt["items"][0]["a_name"] == "TCarol"
-    assert rt["items"][0]["source"] == "ai_inferred"
+    r = client.get(f"{PFX}/api/relationships").json()
+    # 2 edges: 1 me-edge + 1 peer-edge
+    assert r["total"] == 2
+    sources = {item["source"] for item in r["items"]}
+    assert sources == {"manual", "ai_inferred"}
 
 
 def test_list_filters_by_min_strength_and_source(
     setup: tuple[TestClient, dict[str, int]],
 ) -> None:
     client, _ = setup
-    # min_strength=3 should drop T's strength=2 row.
-    r = client.get("/api/relationships?owner=t&min_strength=3").json()
-    assert r["total"] == 0
-    # source=manual should only see R's me-edge.
-    r = client.get("/api/relationships?owner=r&source=manual").json()
+    r = client.get(f"{PFX}/api/relationships?min_strength=3").json()
     assert r["total"] == 1
-    r = client.get("/api/relationships?owner=r&source=ai_inferred").json()
-    assert r["total"] == 0
+    assert r["items"][0]["source"] == "manual"
+
+    r = client.get(f"{PFX}/api/relationships?source=ai_inferred").json()
+    assert r["total"] == 1
+    assert r["items"][0]["source"] == "ai_inferred"
 
 
 def test_list_include_me_false_drops_me_edges(
     setup: tuple[TestClient, dict[str, int]],
 ) -> None:
     client, _ = setup
-    r = client.get("/api/relationships?owner=r&include_me=false").json()
-    assert r["total"] == 0  # R only has a me-edge
+    r = client.get(f"{PFX}/api/relationships?include_me=false").json()
+    # me-edge dropped; only peer edge remains.
+    assert r["total"] == 1
+    item = r["items"][0]
+    assert not item["a_is_me"] and not item["b_is_me"]
 
 
 # ---------- /api/relationships/parse ---------------------------------------
@@ -149,7 +150,7 @@ def test_parse_returns_proposals_with_existing_edge_context(
     setup: tuple[TestClient, dict[str, int]],
 ) -> None:
     client, pids = setup
-    # Stage one edge between RAlice (P001) and RBob (P002).
+    # P000 = me, P001..P004 = Alice..Dan in insert order. Stage Alice ↔ Bob.
     _FakeLLMClient.next_response = {
         "edges": [
             {
@@ -163,36 +164,35 @@ def test_parse_returns_proposals_with_existing_edge_context(
         "unknown_mentions": ["Mike"],
     }
     r = client.post(
-        "/api/relationships/parse?owner=r",
-        json={"text": "RAlice 和 RBob 是饭局认识的，Mike 也在场。"},
+        f"{PFX}/api/relationships/parse",
+        json={"text": "Alice 和 Bob 是饭局认识的，Mike 也在场。"},
     )
     assert r.status_code == 200
     data = r.json()
     assert len(data["proposals"]) == 1
     p = data["proposals"][0]
-    assert {p["a_id"], p["b_id"]} == {pids["RAlice"], pids["RBob"]}
-    assert p["existing_edge"] is None  # not yet in DB
+    assert {p["a_id"], p["b_id"]} == {pids["Alice"], pids["Bob"]}
+    assert p["existing_edge"] is None
     assert data["unknown_mentions"] == ["Mike"]
-    # context_for is keyed by person id and contains existing edges
-    # touching that person — RAlice has the manual me-edge, so we expect
-    # it to surface here.
-    assert str(pids["RAlice"]) in data["context_for"]
+    # Alice has the manual me-edge; it should surface in context_for[Alice].
+    assert str(pids["Alice"]) in data["context_for"]
     assert any(
-        e["b_name"] == "RAlice" or e["a_name"] == "RAlice"
-        for e in data["context_for"][str(pids["RAlice"])]
+        e["b_name"] == "Alice" or e["a_name"] == "Alice"
+        for e in data["context_for"][str(pids["Alice"])]
     )
 
 
-def test_parse_owner_isolation(setup: tuple[TestClient, dict[str, int]]) -> None:
-    """If we ask R to parse but the LLM returns a token (P001) that maps
-    to a *different* contact in T's namespace, R must drop it because R
-    has no P002 etc."""
+def test_parse_drops_unknown_tokens(
+    setup: tuple[TestClient, dict[str, int]],
+) -> None:
+    """LLM hallucinating a token outside the issued range must be silently
+    dropped — not 500'd."""
     client, _ = setup
     _FakeLLMClient.next_response = {
-        "edges": [{"a": "P003", "b": "P004", "strength": 5}],
+        "edges": [{"a": "P001", "b": "P999", "strength": 5}],
         "unknown_mentions": [],
     }
-    r = client.post("/api/relationships/parse?owner=r", json={"text": "x"}).json()
+    r = client.post(f"{PFX}/api/relationships/parse", json={"text": "x"}).json()
     assert r["proposals"] == []
 
 
@@ -204,42 +204,35 @@ def test_apply_writes_manual_edge_and_returns_dto(
     body = {
         "edges": [
             {
-                "a_id": pids["RAlice"],
-                "b_id": pids["RBob"],
+                "a_id": pids["Alice"],
+                "b_id": pids["Bob"],
                 "strength": 3,
                 "context": "校友",
                 "frequency": "yearly",
             }
         ]
     }
-    r = client.post("/api/relationships/apply?owner=r", json=body).json()
+    r = client.post(f"{PFX}/api/relationships/apply", json=body).json()
     assert r["applied"] == 1
     assert r["skipped"] == 0
     assert len(r["items"]) == 1
     assert r["items"][0]["source"] == "manual"
 
-    # Now visible on list endpoint.
-    listed = client.get("/api/relationships?owner=r&include_me=false").json()
-    assert listed["total"] == 1
-    assert listed["items"][0]["context"] == "校友"
+    listed = client.get(f"{PFX}/api/relationships?include_me=false").json()
+    # Pre-seed peer edge (Carol↔Dan) + new Alice↔Bob = 2.
+    assert listed["total"] == 2
+    contexts = {item["context"] for item in listed["items"]}
+    assert "校友" in contexts
 
 
-def test_apply_rejects_cross_owner_endpoints(
+def test_apply_skips_unknown_pid(
     setup: tuple[TestClient, dict[str, int]],
 ) -> None:
-    """Even if the client crafts a request mixing R's id with T's id,
-    the endpoint must skip it (owner-scoped pid check)."""
+    """Endpoint must guard against client-supplied person ids that don't
+    exist in this mount's db."""
     client, pids = setup
-    body = {
-        "edges": [
-            {
-                "a_id": pids["RAlice"],
-                "b_id": pids["TCarol"],  # not in R's roster
-                "strength": 3,
-            }
-        ]
-    }
-    r = client.post("/api/relationships/apply?owner=r", json=body).json()
+    body = {"edges": [{"a_id": pids["Alice"], "b_id": 9_999_999, "strength": 3}]}
+    r = client.post(f"{PFX}/api/relationships/apply", json=body).json()
     assert r["applied"] == 0
     assert r["skipped"] == 1
 
@@ -249,12 +242,12 @@ def test_patch_promotes_to_manual_and_overrides_strength(
     setup: tuple[TestClient, dict[str, int]],
 ) -> None:
     client, _ = setup
-    listed = client.get("/api/relationships?owner=t").json()
+    listed = client.get(f"{PFX}/api/relationships?source=ai_inferred").json()
+    assert listed["total"] == 1
     rel_id = listed["items"][0]["id"]
-    assert listed["items"][0]["source"] == "ai_inferred"
 
     r = client.patch(
-        f"/api/relationships/{rel_id}?owner=t",
+        f"{PFX}/api/relationships/{rel_id}",
         json={"strength": 5, "context": "改成铁磁"},
     )
     assert r.status_code == 200
@@ -264,13 +257,12 @@ def test_patch_promotes_to_manual_and_overrides_strength(
     assert updated["context"] == "改成铁磁"
 
 
-def test_patch_404_when_edge_belongs_to_other_owner(
+def test_patch_404_for_unknown_id(
     setup: tuple[TestClient, dict[str, int]],
 ) -> None:
     client, _ = setup
-    t_rel_id = client.get("/api/relationships?owner=t").json()["items"][0]["id"]
     r = client.patch(
-        f"/api/relationships/{t_rel_id}?owner=r",
+        f"{PFX}/api/relationships/9999999",
         json={"strength": 5},
     )
     assert r.status_code == 404
@@ -278,9 +270,9 @@ def test_patch_404_when_edge_belongs_to_other_owner(
 
 def test_delete_removes_edge(setup: tuple[TestClient, dict[str, int]]) -> None:
     client, _ = setup
-    listed = client.get("/api/relationships?owner=t").json()
+    listed = client.get(f"{PFX}/api/relationships?source=ai_inferred").json()
     rel_id = listed["items"][0]["id"]
-    r = client.delete(f"/api/relationships/{rel_id}?owner=t")
+    r = client.delete(f"{PFX}/api/relationships/{rel_id}")
     assert r.status_code == 200
-    again = client.get("/api/relationships?owner=t").json()
+    again = client.get(f"{PFX}/api/relationships?source=ai_inferred").json()
     assert again["total"] == 0

@@ -20,12 +20,10 @@ class PathFinder:
         self,
         repo: Repository,
         max_hops: int = 3,
-        owner_id: int | None = None,
         weak_me_floor: int = 4,
     ) -> None:
         self._repo = repo
         self._max_hops = max_hops
-        self._owner_id = owner_id
         self._weak_me_floor = max(1, min(5, weak_me_floor))
         self._graph: nx.Graph | None = None
         self._person_cache: dict[int, Person] = {}
@@ -50,7 +48,7 @@ class PathFinder:
         friend is available; only when no such bridge exists does the
         weak direct edge survive as a `weak` 1-hop fallback.
         """
-        me = self._repo.get_me(owner_id=self._owner_id)
+        me = self._repo.get_me()
         if me is None or me.id is None:
             raise RuntimeError("No 'me' record. Run `lodestar init` first.")
 
@@ -111,7 +109,7 @@ class PathFinder:
     def _build_graph(self) -> nx.Graph:
         if self._graph is not None:
             return self._graph
-        me = self._repo.get_me(owner_id=self._owner_id)
+        me = self._repo.get_me()
         me_id = me.id if me else None
 
         # Penalty multiplier on weak Me edges. Picked large enough that
@@ -122,7 +120,7 @@ class PathFinder:
         weak_penalty = float(self._max_hops * self._max_hops * 4)
 
         g: nx.Graph = nx.Graph()
-        for rel in self._repo.list_relationships(owner_id=self._owner_id):
+        for rel in self._repo.list_relationships():
             base = 1.0 / max(rel.strength, 1)
             weight = base
             if (

@@ -108,21 +108,19 @@ JSON schema（严格遵循 key 名）:
 
 
 class L1Extractor:
-    """Run L1 on every person in an owner's roster."""
+    """Run L1 on every person in the network."""
 
     def __init__(
         self,
         repo: Repository,
-        owner_id: int,
         client: LLMClient,
     ) -> None:
         self._repo = repo
-        self._owner_id = owner_id
         self._client = client
 
     # ------------------------------------------------------------------
-    def build_owner_anonymizer(self) -> Anonymizer:
-        """Construct an Anonymizer covering the entire owner roster.
+    def build_anonymizer(self) -> Anonymizer:
+        """Construct an Anonymizer covering the entire roster.
 
         Includes:
           - every person (`Pxxx` tokens; `me` is always P000)
@@ -133,8 +131,8 @@ class L1Extractor:
         Public so callers (e.g. the web `preview` endpoint) can reuse the
         same mapping when running ad-hoc extractions on synthetic input.
         """
-        all_people = self._repo.list_people(owner_id=self._owner_id)
-        me = self._repo.get_me(owner_id=self._owner_id)
+        all_people = self._repo.list_people()
+        me = self._repo.get_me()
         me_name = me.name if me else "我"
         me_id = me.id if me and me.id is not None else -1
         # Collect every known company across all contacts. Sort longest
@@ -171,15 +169,15 @@ class L1Extractor:
         invoked after each row — used by the web background-job runner
         to push progress to the frontend.
         """
-        people = self._repo.list_people(owner_id=self._owner_id)
+        people = self._repo.list_people()
         if limit is not None:
             people = people[:limit]
 
-        # Build the anonymizer once, covering EVERY contact in this owner's
-        # roster (not just the rows we're enriching). This way the LLM sees
+        # Build the anonymizer once, covering EVERY contact in the roster
+        # (not just the rows we're enriching). This way the LLM sees
         # consistent Pxxx tokens even if a row's bio mentions a contact
         # that's not currently being processed.
-        anonymizer = self.build_owner_anonymizer()
+        anonymizer = self.build_anonymizer()
 
         results: list[L1Result] = []
         total = len(people)
@@ -243,7 +241,7 @@ class L1Extractor:
         """
         if person.id is None:
             raise LLMError("person.id is None")
-        anon = anonymizer or self.build_owner_anonymizer()
+        anon = anonymizer or self.build_anonymizer()
         return self._extract_one(person, anon)
 
     def extract_for_input(
@@ -262,12 +260,12 @@ class L1Extractor:
 
         Used by the `POST /api/enrich/preview` endpoint that powers the
         "AI 解析背景" button on the add-contact dialog. We piggyback on
-        the owner's existing anonymizer so any in-table names mentioned
-        inside `bio` still get redacted; the synthetic name itself is
-        passed through with a placeholder token (P_NEW) since this person
-        is not yet known to the graph.
+        the existing anonymizer so any in-table names mentioned inside
+        `bio` still get redacted; the synthetic name itself is passed
+        through with a placeholder token (P_NEW) since this person is
+        not yet known to the graph.
         """
-        anon = self.build_owner_anonymizer()
+        anon = self.build_anonymizer()
         synthetic = Person(
             id=-1,  # placeholder; never written
             name=(name or "").strip() or "(unnamed)",
@@ -279,7 +277,7 @@ class L1Extractor:
             needs=[],
         )
         # Build a payload that uses P_NEW for the row being previewed, and
-        # otherwise reuses the owner anonymizer for any in-table mentions.
+        # otherwise reuses the anonymizer for any in-table mentions.
         payload = self._build_input_for_synthetic(
             synthetic,
             anon,

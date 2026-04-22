@@ -18,28 +18,6 @@ class Frequency(StrEnum):
     RARE = "rare"
 
 
-class Owner(BaseModel):
-    """A network owner — one person whose contacts make up a subgraph.
-
-    Multiple owners share the same database; each owner has their own
-    `me` Person row. Contacts are merged across owners by name (so a
-    shared friend appears as a single node in both subgraphs), but the
-    `me`→contact edges and the `person_owner` membership table keep
-    each owner's view independent.
-    """
-
-    model_config = ConfigDict(from_attributes=True)
-
-    id: int | None = None
-    slug: str = Field(description="URL-safe short id, e.g. 'richard'.")
-    display_name: str
-    me_person_id: int
-    accent_color: str | None = None
-    position: int = 0
-    # 网页标签页锁：非空则 /api 下除 list/unlock 外需带 X-Owner-Unlock
-    web_password_hash: str | None = None
-
-
 class Person(BaseModel):
     """A single person in the network (including 'me', which has is_me=True)."""
 

@@ -49,9 +49,6 @@ class Settings(BaseSettings):
     # strength≤3（点头之交 / 弱认识 / 普通朋友）都倾向走引荐，只有熟朋友
     # 及以上算「可直接办成」的直连；可用 LODESTAR_WEAK_ME_FLOOR 调松或调严。
     weak_me_floor: int = Field(default=4, ge=1, le=5)
-    # 签名网页解锁令牌（X-Owner-Unlock）。留空时从 db_path 派生，仅适合本机；
-    # 多机部署请设置 LODESTAR_OWNER_UNLOCK_SECRET。
-    owner_unlock_secret: str = Field(default="")
 
     # ----- Stage-2 reranker -----
     # 在 HybridSearch 之后插入的重排器：

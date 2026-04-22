@@ -11,7 +11,7 @@ import struct
 from collections.abc import Iterable, Sequence
 from typing import Any
 
-from lodestar.models import Frequency, Owner, Person, Relationship
+from lodestar.models import Frequency, Person, Relationship
 
 
 def _pack_vector(vec: Sequence[float]) -> bytes:
@@ -39,147 +39,133 @@ _SOURCE_PRIORITY: dict[str, int] = {
 
 
 class Repository:
-    """Data access layer."""
+    """Data access layer.
+
+    一人一库（v4）：``Repository`` 只面对**一个** db handle，没有 owner
+    维度的方法。多人靠 web 层 ``--mount`` 把多个 db 挂到同一进程的不同
+    URL 前缀，**不在数据层混合**。
+    """
 
     def __init__(self, conn: sqlite3.Connection) -> None:
         self.conn = conn
 
-    # ------------------------------------------------------------- Owners
-    def list_owners(self) -> list[Owner]:
-        rows = self.conn.execute(
-            "SELECT * FROM owner ORDER BY position, id"
-        ).fetchall()
-        return [self._hydrate_owner(r) for r in rows]
-
-    def get_owner_by_slug(self, slug: str) -> Owner | None:
+    # --------------------------------------------------------- Meta KV
+    def get_meta(self, key: str) -> str | None:
         row = self.conn.execute(
-            "SELECT * FROM owner WHERE slug = ?", (slug,)
+            "SELECT value FROM meta WHERE key = ?", (key,)
         ).fetchone()
-        return self._hydrate_owner(row) if row else None
+        return row["value"] if row else None
 
-    def get_owner(self, owner_id: int) -> Owner | None:
-        row = self.conn.execute(
-            "SELECT * FROM owner WHERE id = ?", (owner_id,)
-        ).fetchone()
-        return self._hydrate_owner(row) if row else None
-
-    def ensure_owner(
-        self,
-        slug: str,
-        display_name: str,
-        bio: str | None = None,
-        accent_color: str | None = None,
-    ) -> Owner:
-        """Create the owner (and its me-person row) if not already present."""
-        existing = self.get_owner_by_slug(slug)
-        if existing is not None:
-            return existing
-        # Each owner needs its own me-person; we always create a fresh one
-        # rather than reusing an existing person, even if the display name
-        # matches an existing contact, to keep `me` topologically distinct.
+    def set_meta(self, key: str, value: str | None) -> None:
         with self.conn:
-            cur = self.conn.execute(
-                "INSERT INTO person (name, bio, is_me) VALUES (?, ?, 1)",
-                (display_name, bio),
-            )
-            me_pid = cur.lastrowid
-            assert me_pid is not None
-            position = self.conn.execute(
-                "SELECT COALESCE(MAX(position), -1) + 1 AS p FROM owner"
-            ).fetchone()["p"]
-            self.conn.execute(
-                "INSERT INTO owner (slug, display_name, me_person_id, "
-                "accent_color, position) VALUES (?, ?, ?, ?, ?)",
-                (slug, display_name, me_pid, accent_color, position),
-            )
-            owner_id = self.conn.execute(
-                "SELECT id FROM owner WHERE slug = ?", (slug,)
-            ).fetchone()["id"]
-            self.conn.execute(
-                "INSERT OR IGNORE INTO person_owner (person_id, owner_id) "
-                "VALUES (?, ?)",
-                (me_pid, owner_id),
-            )
-        result = self.get_owner_by_slug(slug)
-        assert result is not None
-        return result
-
-    def _hydrate_owner(self, row: sqlite3.Row) -> Owner:
-        return Owner(
-            id=int(row["id"]),
-            slug=row["slug"],
-            display_name=row["display_name"],
-            me_person_id=int(row["me_person_id"]),
-            accent_color=_row_get(row, "accent_color", None),
-            position=int(_row_get(row, "position", 0)),
-            web_password_hash=_row_get(row, "web_password_hash", None),
-        )
-
-    def set_owner_web_password(self, owner_id: int, plain: str | None) -> None:
-        """Set or clear per-owner web UI password (stored as hash)."""
-        with self.conn:
-            if plain is None or plain == "":
-                self.conn.execute(
-                    "UPDATE owner SET web_password_hash = NULL WHERE id = ?",
-                    (owner_id,),
-                )
+            if value is None:
+                self.conn.execute("DELETE FROM meta WHERE key = ?", (key,))
             else:
-                from lodestar.web.owner_unlock import hash_web_password
-
-                h = hash_web_password(plain)
                 self.conn.execute(
-                    "UPDATE owner SET web_password_hash = ? WHERE id = ?",
-                    (h, owner_id),
+                    "INSERT INTO meta (key, value) VALUES (?, ?) "
+                    "ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+                    (key, value),
                 )
+
+    # ----------- Typed accessors over meta KV (used by web/CLI) ------
+    @property
+    def display_name(self) -> str | None:
+        return self.get_meta("display_name")
+
+    @display_name.setter
+    def display_name(self, value: str | None) -> None:
+        self.set_meta("display_name", value)
+
+    @property
+    def accent_color(self) -> str | None:
+        return self.get_meta("accent_color")
+
+    @accent_color.setter
+    def accent_color(self, value: str | None) -> None:
+        self.set_meta("accent_color", value)
+
+    @property
+    def unlock_secret(self) -> str:
+        """HMAC signing key for this db's web unlock tokens.
+
+        Guaranteed to exist because `init_schema()` populates it on first
+        open. Cp'ing the db file copies the secret too — that's
+        intentional: file-level access is the only ACL we trust.
+        """
+        v = self.get_meta("unlock_secret")
+        assert v, "init_schema must populate unlock_secret"
+        return v
+
+    @property
+    def web_password_hash(self) -> str | None:
+        """Salted PBKDF2 hash, hex-encoded; None means 'no password set'."""
+        return self.get_meta("web_password_hash")
+
+    @property
+    def web_password_salt(self) -> str | None:
+        return self.get_meta("web_password_salt")
+
+    def set_web_password(self, plain: str | None) -> None:
+        """Set or clear the web UI password.
+
+        Hash algorithm: PBKDF2-HMAC-SHA256, 200_000 iterations, 16-byte
+        random salt per password (re-generated on every set). Plenty
+        strong for friction-grade auth in a same-host same-team setting.
+        """
+        if plain is None or plain == "":
+            self.set_meta("web_password_hash", None)
+            self.set_meta("web_password_salt", None)
+            return
+        import hashlib
+        import secrets as _secrets
+
+        salt = _secrets.token_bytes(16)
+        digest = hashlib.pbkdf2_hmac("sha256", plain.encode("utf-8"), salt, 200_000)
+        self.set_meta("web_password_salt", salt.hex())
+        self.set_meta("web_password_hash", digest.hex())
+
+    def verify_web_password(self, plain: str) -> bool:
+        salt_hex = self.web_password_salt
+        hash_hex = self.web_password_hash
+        if not salt_hex or not hash_hex:
+            return False
+        import hashlib
+        import secrets as _secrets
+
+        digest = hashlib.pbkdf2_hmac(
+            "sha256", plain.encode("utf-8"), bytes.fromhex(salt_hex), 200_000
+        )
+        return _secrets.compare_digest(digest.hex(), hash_hex)
 
     # ------------------------------------------------------------------ Me
-    def get_me(self, owner_id: int | None = None) -> Person | None:
-        """Return the `me` person.
-
-        If `owner_id` is provided, returns that owner's me row. If not,
-        falls back to the first owner (so legacy single-owner code paths
-        keep working for ad-hoc CLI usage).
-        """
-        if owner_id is not None:
-            owner = self.get_owner(owner_id)
-            return self.get_person(owner.me_person_id) if owner else None
-        owners = self.list_owners()
-        if owners:
-            return self.get_person(owners[0].me_person_id)
-        # Last-resort fallback for databases predating the owner table.
+    def get_me(self) -> Person | None:
+        """Return the (single) `me` person, or None if not initialised yet."""
         row = self.conn.execute(
             "SELECT * FROM person WHERE is_me = 1 LIMIT 1"
         ).fetchone()
         return self._hydrate_person(row) if row else None
 
     def ensure_me(self, name: str, bio: str | None = None) -> Person:
-        """Convenience for legacy single-owner workflows.
+        """Create the singleton me-person if absent, else return it.
 
-        Creates a default owner (slug='me') if none exists; otherwise
-        returns its me row.
+        Also fills in `meta.display_name` from `name` on first creation
+        so the web tab has something to show.
         """
-        owner = self.get_owner_by_slug("me") or self.ensure_owner(
-            slug="me", display_name=name, bio=bio,
-        )
-        result = self.get_person(owner.me_person_id)
+        existing = self.get_me()
+        if existing is not None:
+            return existing
+        with self.conn:
+            cur = self.conn.execute(
+                "INSERT INTO person (name, bio, is_me) VALUES (?, ?, 1)",
+                (name, bio),
+            )
+            me_pid = cur.lastrowid
+            assert me_pid is not None
+        if not self.display_name:
+            self.display_name = name
+        result = self.get_person(me_pid)
         assert result is not None
         return result
-
-    # -------------------------------------------------- person↔owner glue
-    def attach_person_to_owner(self, person_id: int, owner_id: int) -> None:
-        with self.conn:
-            self.conn.execute(
-                "INSERT OR IGNORE INTO person_owner (person_id, owner_id) "
-                "VALUES (?, ?)",
-                (person_id, owner_id),
-            )
-
-    def list_owner_person_ids(self, owner_id: int) -> set[int]:
-        rows = self.conn.execute(
-            "SELECT person_id FROM person_owner WHERE owner_id = ?",
-            (owner_id,),
-        ).fetchall()
-        return {int(r["person_id"]) for r in rows}
 
     # -------------------------------------------------------------- Person
     def add_person(self, person: Person) -> Person:
@@ -233,34 +219,19 @@ class Repository:
         return self._hydrate_person(row) if row else None
 
     def find_person_by_name(self, name: str) -> Person | None:
-        """Lookup is intentionally global (owner-agnostic) so that a
-        contact shared between two owners merges to a single row by name.
-
-        We also explicitly skip rows where `is_me=1` so an owner whose
+        """Lookup by exact name, skipping the me-row so an owner whose
         display name happens to match a real contact's name does not
-        accidentally get aliased onto that contact's node.
-        """
+        accidentally get aliased onto that contact's node."""
         row = self.conn.execute(
             "SELECT * FROM person WHERE name = ? AND is_me = 0 LIMIT 1",
             (name,),
         ).fetchone()
         return self._hydrate_person(row) if row else None
 
-    def list_people(self, owner_id: int | None = None) -> list[Person]:
-        if owner_id is None:
-            rows = self.conn.execute(
-                "SELECT * FROM person WHERE is_me = 0 ORDER BY name"
-            ).fetchall()
-        else:
-            rows = self.conn.execute(
-                """
-                SELECT p.* FROM person p
-                JOIN person_owner po ON po.person_id = p.id
-                WHERE p.is_me = 0 AND po.owner_id = ?
-                ORDER BY p.name
-                """,
-                (owner_id,),
-            ).fetchall()
+    def list_people(self) -> list[Person]:
+        rows = self.conn.execute(
+            "SELECT * FROM person WHERE is_me = 0 ORDER BY name"
+        ).fetchall()
         return [self._hydrate_person(r) for r in rows]
 
     def _hydrate_person(self, row: sqlite3.Row) -> Person:
@@ -347,28 +318,21 @@ class Repository:
             )
 
     # ---------------------------------------------------------- Companies
-    def list_owner_companies(
-        self, owner_id: int
-    ) -> list[tuple[int, str, int]]:
+    def list_companies(self) -> list[tuple[int, str, int]]:
         """Return `(company_id, name, headcount)` for every company that
-        has at least one person attached under this owner.
+        has at least one person attached.
 
         Used by `lodestar normalize-companies` to decide which alias rows
-        to merge. We scope to one owner so two owners don't accidentally
-        leak each other's roster — same company name in both owners is
-        the same `company` row, but headcount is per-owner here.
+        to merge.
         """
         rows = self.conn.execute(
             """
             SELECT c.id AS id, c.name AS name, COUNT(*) AS n
             FROM company c
             JOIN person_company pc ON pc.company_id = c.id
-            JOIN person_owner   po ON po.person_id = pc.person_id
-            WHERE po.owner_id = ?
             GROUP BY c.id, c.name
             ORDER BY n DESC, c.name
             """,
-            (owner_id,),
         ).fetchall()
         return [(int(r["id"]), str(r["name"]), int(r["n"])) for r in rows]
 
@@ -376,8 +340,6 @@ class Repository:
         self,
         canonical: str,
         aliases: Sequence[str],
-        *,
-        owner_id: int | None = None,
     ) -> tuple[int, int]:
         """Merge `aliases` into `canonical` at the `company` table level.
 
@@ -388,14 +350,8 @@ class Repository:
         alias does, we **rename** the alias to canonical instead of
         creating a fresh row, to preserve any existing FK references.
 
-        `owner_id` is informational only — `company` is a global lookup
-        table not scoped per owner, and merging it affects every owner
-        that shares the alias. We accept the param to make caller intent
-        explicit; the actual rewrite spans all owners atomically.
-
         Returns `(reassigned_links, deleted_alias_rows)`.
         """
-        del owner_id  # caller-intent marker; merge is global by design
         canonical_clean = canonical.strip()
         if not canonical_clean:
             raise ValueError("canonical company name must be non-empty")
@@ -481,49 +437,22 @@ class Repository:
         self,
         query_vec: Sequence[float],
         limit: int = 20,
-        owner_id: int | None = None,
     ) -> list[tuple[int, float]]:
-        """Return [(person_id, distance)] for nearest neighbors. Lower distance = closer.
-
-        若提供 ``owner_id``，则在向量召回阶段就直接 JOIN ``person_owner``
-        过滤——避免「召回 N 个 → 在 Python 侧丢掉对方网络的人 → 实际只剩
-        几个」的 owner 串台问题。这里多取 ``limit * 4`` 让 sqlite-vec 在
-        全库 KNN 之后仍有足够候选可被 owner 过滤后保留。
-        """
-        if owner_id is None:
-            rows = self.conn.execute(
-                """
-                SELECT person_id, distance
-                FROM vec_person_bio
-                WHERE embedding MATCH ?
-                  AND k = ?
-                ORDER BY distance
-                """,
-                (_pack_vector(query_vec), limit),
-            ).fetchall()
-            return [(int(r["person_id"]), float(r["distance"])) for r in rows]
-
-        knn_limit = max(limit * 4, limit)
+        """Return [(person_id, distance)] for nearest neighbors. Lower distance = closer."""
         rows = self.conn.execute(
             """
-            SELECT v.person_id AS person_id, v.distance AS distance
-            FROM vec_person_bio v
-            JOIN person_owner po
-              ON po.person_id = v.person_id
-             AND po.owner_id = ?
-            WHERE v.embedding MATCH ?
-              AND v.k = ?
-            ORDER BY v.distance
-            LIMIT ?
+            SELECT person_id, distance
+            FROM vec_person_bio
+            WHERE embedding MATCH ?
+              AND k = ?
+            ORDER BY distance
             """,
-            (owner_id, _pack_vector(query_vec), knn_limit, limit),
+            (_pack_vector(query_vec), limit),
         ).fetchall()
         return [(int(r["person_id"]), float(r["distance"])) for r in rows]
 
     # ------------------------------------------------------- Relationships
-    def add_relationship(
-        self, rel: Relationship, owner_id: int | None = None
-    ) -> Relationship:
+    def add_relationship(self, rel: Relationship) -> Relationship:
         """Upsert an edge.
 
         Provenance hierarchy: `manual` > `colleague_inferred` > `ai_inferred`.
@@ -547,11 +476,10 @@ class Repository:
             self.conn.execute(
                 """
                 INSERT INTO relationship
-                    (source_id, target_id, owner_id, strength, context,
+                    (source_id, target_id, strength, context,
                      frequency, last_contact, introduced_by_id, source)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT(source_id, target_id) DO UPDATE SET
-                    owner_id = excluded.owner_id,
                     strength = excluded.strength,
                     context = excluded.context,
                     frequency = excluded.frequency,
@@ -562,7 +490,6 @@ class Repository:
                 (
                     rel.source_id,
                     rel.target_id,
-                    owner_id,
                     rel.strength,
                     rel.context,
                     rel.frequency.value,
@@ -591,43 +518,18 @@ class Repository:
             source=_row_get(row, "source", "manual"),
         )
 
-    def delete_ai_inferred_relationships(self, owner_id: int) -> int:
-        """Wipe all `ai_inferred` edges for a given owner. Used by `enrich`
-        before re-extracting so stale AI guesses don't pile up."""
+    def delete_ai_inferred_relationships(self) -> int:
+        """Wipe all `ai_inferred` edges. Used by `enrich` before re-extracting
+        so stale AI guesses don't pile up."""
         with self.conn:
             cur = self.conn.execute(
-                "DELETE FROM relationship WHERE owner_id = ? AND source = 'ai_inferred'",
-                (owner_id,),
+                "DELETE FROM relationship WHERE source = 'ai_inferred'",
             )
             return cur.rowcount or 0
 
-    def list_relationships(
-        self, owner_id: int | None = None
-    ) -> list[Relationship]:
-        """Return edges visible from the given owner's perspective.
-
-        Filtering rules when `owner_id` is provided:
-          - keep an edge if both endpoints are persons curated by this
-            owner (peer↔peer and me↔contact alike);
-          - drop edges to *another* owner's `me` node, so Richard never
-            sees Tommy's me-edges and vice versa.
-
-        When `owner_id` is None, returns every relationship in the DB
-        unfiltered.
-        """
-        if owner_id is None:
-            rows = self.conn.execute("SELECT * FROM relationship").fetchall()
-        else:
-            rows = self.conn.execute(
-                """
-                SELECT r.* FROM relationship r
-                JOIN person_owner po_s
-                    ON po_s.person_id = r.source_id AND po_s.owner_id = ?
-                JOIN person_owner po_t
-                    ON po_t.person_id = r.target_id AND po_t.owner_id = ?
-                """,
-                (owner_id, owner_id),
-            ).fetchall()
+    def list_relationships(self) -> list[Relationship]:
+        """Return every relationship in the DB."""
+        rows = self.conn.execute("SELECT * FROM relationship").fetchall()
         return [
             Relationship(
                 id=r["id"],
@@ -644,9 +546,7 @@ class Repository:
         ]
 
     # ---------------------------------------------------- Keyword matching
-    def keyword_candidates(
-        self, terms: Iterable[str], owner_id: int | None = None
-    ) -> dict[int, int]:
+    def keyword_candidates(self, terms: Iterable[str]) -> dict[int, int]:
         """Score people by how many distinct query terms hit any attribute.
 
         Returns {person_id: hit_count}. Case-insensitive LIKE match against
@@ -656,24 +556,16 @@ class Repository:
         column records what a person *is seeking* — matching a helper-query
         term like "融资" against another person's need "机构融资" would
         surface peers with the same gap as the searcher, not actual helpers.
-        See `brokerable_by_needs()` for the seeker↔provider match that
-        *does* want the `need` column.
         """
         terms = [t.strip() for t in terms if t and t.strip()]
         if not terms:
             return {}
 
         scores: dict[int, int] = {}
-        owner_join = (
-            "JOIN person_owner po ON po.person_id = p.id AND po.owner_id = ? "
-            if owner_id is not None
-            else ""
-        )
         for term in terms:
             like = f"%{term}%"
-            sql = f"""
+            sql = """
                 SELECT DISTINCT p.id AS pid FROM person p
-                {owner_join}
                 LEFT JOIN person_tag pt ON pt.person_id = p.id
                 LEFT JOIN tag t         ON t.id = pt.tag_id
                 LEFT JOIN person_skill ps ON ps.person_id = p.id
@@ -693,10 +585,7 @@ class Repository:
                     OR ci.name LIKE ? COLLATE NOCASE
                   )
             """
-            params: list[Any] = []
-            if owner_id is not None:
-                params.append(owner_id)
-            params.extend([like] * 7)
+            params: list[Any] = [like] * 7
             for row in self.conn.execute(sql, tuple(params)).fetchall():
                 pid = int(row["pid"])
                 scores[pid] = scores.get(pid, 0) + 1

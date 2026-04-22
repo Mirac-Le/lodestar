@@ -1,11 +1,16 @@
 """SQL DDL statements.
 
-Naming conventions:
-  * snake_case for tables and columns.
-  * Surrogate `id` integer primary keys everywhere.
-  * `created_at` / `updated_at` managed by triggers.
-  * Vector column lives in a separate `vec0` virtual table so the
-    relational schema stays simple and portable.
+设计原则（v4，post owner-removal）：
+  * 一人一库：每个 SQLite 文件 = 一个 owner 的网络。**不再**有 ``owner``
+    / ``person_owner`` 表，``relationship`` 也**不再**有 ``owner_id``
+    列。多人共用同一进程靠 web 层的 ``--mount slug=path`` 把不同 db
+    挂在不同 URL 前缀下，**进程内多个 db handle，文件级隔离**。
+  * ``person.is_me`` 全库唯一（UNIQUE INDEX）—— "我" 在这个网络里只有一个。
+  * snake_case，整数代理键，``created_at`` / ``updated_at`` 触发器维护，
+    向量列住在独立 ``vec0`` 虚表里保持关系层简单可移植。
+  * ``meta(key, value)`` 是一个**极简 KV 表**，存 web 密码 hash / 解锁
+    token secret / 显示名 / 主题色这种 db-scoped 单值配置 —— 比为每条
+    都开一列灵活，比独立小表轻量。
 """
 
 from __future__ import annotations
@@ -23,12 +28,11 @@ DDL_STATEMENTS: tuple[str, ...] = (
         updated_at  TEXT NOT NULL DEFAULT (datetime('now'))
     )
     """,
-    # NOTE: the legacy "exactly one me row" unique index has been removed
-    # so that multiple owners (Richard / Tommy / ...) can each have their
-    # own `is_me=1` row. Per-owner uniqueness is enforced via the `owner`
-    # table's me_person_id column instead.
+    # 全库只能有一行 is_me=1（一人一库）。partial unique index 让 is_me=0
+    # 的几百行不参与去重，is_me=1 的行强制唯一。
     """
-    DROP INDEX IF EXISTS uq_person_is_me
+    CREATE UNIQUE INDEX IF NOT EXISTS uq_person_is_me
+        ON person(is_me) WHERE is_me = 1
     """,
     """
     CREATE INDEX IF NOT EXISTS ix_person_name ON person(name)
@@ -111,40 +115,11 @@ DDL_STATEMENTS: tuple[str, ...] = (
         PRIMARY KEY (person_id, need_id)
     )
     """,
-    # ----------------------------------------------------------------
-    # Multi-owner support: each "owner" (Richard / Tommy / ...) has
-    # their own `me` person and their own slice of contacts. Persons
-    # are merged across owners by name so that a shared friend shows
-    # up as the same node in both subgraphs; person_owner records
-    # which contact rows each owner curates.
-    # ----------------------------------------------------------------
-    """
-    CREATE TABLE IF NOT EXISTS owner (
-        id              INTEGER PRIMARY KEY AUTOINCREMENT,
-        slug            TEXT NOT NULL UNIQUE,
-        display_name    TEXT NOT NULL,
-        me_person_id    INTEGER NOT NULL UNIQUE REFERENCES person(id) ON DELETE CASCADE,
-        accent_color    TEXT,
-        position        INTEGER NOT NULL DEFAULT 0,
-        created_at      TEXT NOT NULL DEFAULT (datetime('now'))
-    )
-    """,
-    """
-    CREATE TABLE IF NOT EXISTS person_owner (
-        person_id INTEGER NOT NULL REFERENCES person(id) ON DELETE CASCADE,
-        owner_id  INTEGER NOT NULL REFERENCES owner(id)  ON DELETE CASCADE,
-        PRIMARY KEY (person_id, owner_id)
-    )
-    """,
-    """
-    CREATE INDEX IF NOT EXISTS ix_person_owner_owner ON person_owner(owner_id)
-    """,
     """
     CREATE TABLE IF NOT EXISTS relationship (
         id                 INTEGER PRIMARY KEY AUTOINCREMENT,
         source_id          INTEGER NOT NULL REFERENCES person(id) ON DELETE CASCADE,
         target_id          INTEGER NOT NULL REFERENCES person(id) ON DELETE CASCADE,
-        owner_id           INTEGER REFERENCES owner(id) ON DELETE SET NULL,
         strength           INTEGER NOT NULL DEFAULT 3
                            CHECK (strength BETWEEN 1 AND 5),
         context            TEXT,
@@ -168,8 +143,19 @@ DDL_STATEMENTS: tuple[str, ...] = (
     """
     CREATE INDEX IF NOT EXISTS ix_rel_target ON relationship(target_id)
     """,
+    # ----------------------------------------------------------------
+    # meta KV：db-scoped 单值配置
+    #   web_password_salt / web_password_hash → web 密码门
+    #   unlock_secret                         → per-db HMAC token 签名 key
+    #   display_name                          → web 顶栏 tab 文本
+    #   accent_color                          → web 顶栏 tab 颜色
+    # 不要把多值数据塞进来；多值数据该建专表。
+    # ----------------------------------------------------------------
     """
-    CREATE INDEX IF NOT EXISTS ix_rel_owner ON relationship(owner_id)
+    CREATE TABLE IF NOT EXISTS meta (
+        key   TEXT PRIMARY KEY,
+        value TEXT
+    )
     """,
 )
 

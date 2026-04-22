@@ -28,31 +28,45 @@ const INDUSTRIES = [
   ["我", "#8f98a6"],
 ];
 
-/* ---------------------------------------- API helpers */
-/* 多 owner 网页锁（B 模式）：
- *   - unlock token 只活在 window.app.activeUnlockToken 内存里，{slug, token}
- *   - 切到另一个 owner 立即丢；刷新页面也丢（不写 sessionStorage / localStorage）
- *   - richard 与 tommy 严格独立：拿到 A 的 token 后再切 B 必须重新输 B 的密码 */
-function withOwner(path) {
-  // `/api/owners` 与解锁接口不带 ?owner=；其余请求挂当前 tab slug。
-  if (path.startsWith("/api/owners")) {
-    if (path.startsWith("/api/owners/unlock")) return path;
-    return path;
-  }
-  const slug = window.app && window.app.owner;
-  if (!slug) return path;
-  const sep = path.includes("?") ? "&" : "?";
-  return `${path}${sep}owner=${encodeURIComponent(slug)}`;
+/* ---------------------------------------- API helpers
+ * 一人一库（mount router）：
+ *   - 每个 mount 独立挂在 `/r/<slug>/` 下，自己一个 db、自己一个密码、
+ *     自己一份 unlock_secret。
+ *   - SPA 跑在某个 mount 的 sub-app 里，绝对不会跨 mount 调 API。
+ *   - "切 tab 必重输"语义靠**整页跳转**实现：换 mount = window.location
+ *     assign 到另一个 `/r/<slug>/`，浏览器丢掉所有 in-memory state，
+ *     新页面 init 时重新跑 unlock flow，自然必须再输一次密码。
+ *   - unlock token 只活在 window.app.unlockToken 里，不写 storage —
+ *     刷新即丢、切 mount 即丢、关 tab 即丢。 */
+
+/** Detect "/r/<slug>/" prefix from current URL. Returns "" for root SPA. */
+function _detectMountPrefix() {
+  const m = window.location.pathname.match(/^\/r\/([^/]+)\//);
+  return m ? `/r/${m[1]}` : "";
+}
+function _detectMountSlug() {
+  const m = window.location.pathname.match(/^\/r\/([^/]+)\//);
+  return m ? m[1] : null;
+}
+
+const MOUNT_PREFIX = _detectMountPrefix();
+const MOUNT_SLUG = _detectMountSlug();
+
+/** Resolve a path: `/api/...` → `/r/<slug>/api/...`, root `/api/mounts`
+ *  stays absolute. */
+function withMount(path) {
+  if (!path.startsWith("/api/")) return path;
+  // `/api/mounts` is a root-level endpoint shared across all mounts.
+  if (path === "/api/mounts" || path.startsWith("/api/mounts/")) return path;
+  if (!MOUNT_PREFIX) return path;
+  return MOUNT_PREFIX + path;
 }
 
 async function api(path, opts = {}) {
   const headers = { "Content-Type": "application/json", ...(opts.headers || {}) };
-  const slug = window.app && window.app.owner;
-  const tok = window.app && window.app.activeUnlockToken;
-  if (slug && tok && tok.slug === slug) {
-    headers["X-Owner-Unlock"] = tok.token;
-  }
-  const res = await fetch(withOwner(path), {
+  const tok = window.app && window.app.unlockToken;
+  if (tok) headers["X-Mount-Unlock"] = tok;
+  const res = await fetch(withMount(path), {
     headers,
     ...opts,
     body: opts.body ? JSON.stringify(opts.body) : undefined,
@@ -64,12 +78,14 @@ async function api(path, opts = {}) {
         const j = JSON.parse(text);
         const d = j.detail;
         const code = typeof d === "object" ? d.code : null;
-        const lockedSlug = typeof d === "object" ? d.slug : null;
-        if (code === "owner_locked" && lockedSlug) {
-          if (window.app?.activeUnlockToken?.slug === lockedSlug) {
-            window.app.activeUnlockToken = null;
+        if (code === "mount_locked") {
+          // Token expired or never issued for this mount — drop it
+          // and re-challenge.
+          if (window.app) {
+            window.app.unlockToken = null;
+            window.app.locked = true;
+            window.app.openUnlockModal();
           }
-          window.app?.notify?.("该网络需重新输入密码解锁", "error");
         }
       } catch (_) { /* ignore */ }
     }
@@ -560,8 +576,9 @@ function appState() {
   return {
     /* ---- data ---- */
     graph: { nodes: [], edges: [], me_id: null, weak_me_floor: 4 },
-    owners: [],            // [{slug, display_name, contact_count, ...}]
-    owner: null,           // active owner slug; null until /api/owners resolves
+    mounts: [],            // [{slug, display_name, contact_count, locked, accent_color, ...}]
+    mountSlug: MOUNT_SLUG, // active mount slug derived from URL; null on root
+    mount: null,           // MountDTO of the current mount
     detail: null,
     paths: [],          // combined results, sorted by combined_score
     indirect: [],       // multi-hop introductions (path_kind == 'indirect')
@@ -652,14 +669,14 @@ function appState() {
     editingRelation: null,     // shallow copy currently being edited
     editingRelationBusy: false,
 
-    /* 多 owner 网页锁（B 模式：内存态、切走即丢、刷新即丢） */
-    showOwnerUnlockModal: false,
-    ownerUnlockSlug: null,
-    ownerUnlockPassword: "",
-    ownerUnlockError: null,
-    ownerUnlockBusy: false,
-    _ownerUnlockDone: null,
-    activeUnlockToken: null,    // {slug, token} | null —— 仅当前 owner 有效
+    /* 一人一库（mount router）：解锁 token 仅在内存里，
+       切 mount = 整页跳转 = token 自然丢失 = 必须再输密码 */
+    locked: false,             // current mount has a password set
+    unlockToken: null,         // string | null —— 仅当前 mount 有效
+    showUnlockModal: false,
+    unlockPassword: "",
+    unlockError: null,
+    unlockBusy: false,
 
     industriesList: INDUSTRIES,
 
@@ -671,151 +688,130 @@ function appState() {
     },
 
     async bootstrap() {
-      // /api/owners must complete before anything that fetches owner-scoped
-      // data, otherwise the first /api/graph call would race with no owner
-      // header and the server would silently fall back to the first owner
-      // (correct, but the URL would lose the slug).
+      // Always fetch /api/mounts first so the owner-tab strip can render
+      // even if the current mount happens to be locked. The mounts endpoint
+      // is on the root app and never requires auth.
       try {
-        const resp = await api("/api/owners");
-        this.owners = resp.owners || [];
-        // Honour ?owner= in the URL so deep links keep the same tab.
-        const params = new URLSearchParams(window.location.search);
-        const requested = params.get("owner");
-        const match = this.owners.find((o) => o.slug === requested);
-        this.owner = (match && match.slug) || resp.default_slug || null;
+        const resp = await api("/api/mounts");
+        this.mounts = resp.mounts || [];
+        this.mount = this.mounts.find((m) => m.slug === this.mountSlug) || null;
+        this.locked = Boolean(this.mount && this.mount.locked);
       } catch (e) {
-        this.notify("加载 owner 列表失败：" + e.message, "error");
+        this.notify("加载网络列表失败：" + e.message, "error");
       }
-      try {
-        await this.ensureOwnerUnlocked();
-      } catch (e) {
-        // "superseded" = 用户在默认 owner 的密码弹窗上直接点了另一个 tab；
-        // "cancelled"  = 用户主动取消。两种情况都不再 toast，让用户自由选 tab。
-        if (e?.message !== "cancelled" && e?.message !== "superseded") {
-          this.notify("解锁失败：" + (e?.message || e), "error");
-        }
+
+      if (!this.mountSlug) {
+        // Root URL `/` with multiple mounts: the user is on the picker
+        // page, no further data fetch makes sense.
         return;
       }
+
+      // Locked mount: pop the password modal first, only fetch data
+      // after the user submits a valid password.
+      if (this.locked) {
+        try {
+          await this.requestUnlock();
+        } catch (e) {
+          if (e?.message !== "cancelled") {
+            this.notify("解锁失败：" + (e?.message || e), "error");
+          }
+          return;
+        }
+      } else {
+        // Open mount: still need a token because the backend only skips
+        // auth when web_password_hash is null (we mirror that on the
+        // frontend by minting a permanent token via /api/unlock).
+        try {
+          const r = await api("/api/unlock", { method: "POST", body: { password: "" } });
+          this.unlockToken = r.token;
+        } catch (e) {
+          this.notify("初始化失败：" + (e?.message || e), "error");
+          return;
+        }
+      }
+
       await this.loadGraph();
       await this.loadStats();
     },
 
-    async ensureOwnerUnlocked() {
-      const slug = this.owner;
-      if (!slug) return;
-      const o = this.owners.find((x) => x.slug === slug);
-      if (!o?.web_locked) return;
-      // 内存里已有该 owner 的 token 才放行；首次进入 / 刷新后都会重弹。
-      if (this.activeUnlockToken?.slug === slug) return;
-      await this.openOwnerUnlockPromise(slug);
-    },
-
-    openOwnerUnlockPromise(slug) {
+    /** Open the password modal and resolve when the user submits a
+     *  correct password. Reject on cancel. */
+    requestUnlock() {
       return new Promise((resolve, reject) => {
-        this.ownerUnlockSlug = slug;
-        this.ownerUnlockPassword = "";
-        this.ownerUnlockError = null;
-        this.ownerUnlockBusy = false;
-        this._ownerUnlockDone = { resolve, reject };
-        this.showOwnerUnlockModal = true;
+        this.unlockPassword = "";
+        this.unlockError = null;
+        this.unlockBusy = false;
+        this._unlockDone = { resolve, reject };
+        this.showUnlockModal = true;
+        // Auto-focus the input when the modal mounts.
+        this.$nextTick(() => {
+          const el = document.getElementById("mount-unlock-pw");
+          if (el) el.focus();
+        });
       });
     },
 
-    cancelOwnerUnlock(reason = "cancelled") {
-      this.showOwnerUnlockModal = false;
-      const done = this._ownerUnlockDone;
-      this._ownerUnlockDone = null;
-      if (done) done.reject(new Error(reason));
+    openUnlockModal() {
+      // Called by the api() helper when a request hits 401.
+      // We don't reject the prior promise because there might not be one
+      // (e.g. token expired mid-session).
+      if (!this.showUnlockModal) {
+        this.requestUnlock().catch(() => {});
+      }
     },
 
-    async submitOwnerUnlock() {
-      this.ownerUnlockBusy = true;
-      this.ownerUnlockError = null;
+    cancelUnlock() {
+      this.showUnlockModal = false;
+      const done = this._unlockDone;
+      this._unlockDone = null;
+      if (done) done.reject(new Error("cancelled"));
+    },
+
+    async submitUnlock() {
+      this.unlockBusy = true;
+      this.unlockError = null;
       try {
-        const r = await fetch("/api/owners/unlock", {
+        const r = await fetch(withMount("/api/unlock"), {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            slug: this.ownerUnlockSlug,
-            password: this.ownerUnlockPassword || "",
-          }),
+          body: JSON.stringify({ password: this.unlockPassword || "" }),
         });
         const text = await r.text();
         if (!r.ok) {
           try {
             const j = JSON.parse(text);
             const d = j.detail;
-            this.ownerUnlockError = typeof d === "object"
+            this.unlockError = typeof d === "object"
               ? (d.message || d.code || text)
               : (d || text);
           } catch (_) {
-            this.ownerUnlockError = text;
+            this.unlockError = text;
           }
           return;
         }
         const data = JSON.parse(text);
-        this.activeUnlockToken = {
-          slug: this.ownerUnlockSlug,
-          token: data.token,
-        };
-        this.showOwnerUnlockModal = false;
-        const done = this._ownerUnlockDone;
-        this._ownerUnlockDone = null;
+        this.unlockToken = data.token;
+        this.showUnlockModal = false;
+        const done = this._unlockDone;
+        this._unlockDone = null;
         if (done) done.resolve();
+        // If this was a re-challenge (token expired mid-session), kick
+        // off a graph reload so the UI recovers without a manual refresh.
+        if (this.graph && (!this.graph.nodes || this.graph.nodes.length === 0)) {
+          this.loadGraph().then(() => this.loadStats());
+        }
       } catch (e) {
-        this.ownerUnlockError = e.message || String(e);
+        this.unlockError = e.message || String(e);
       } finally {
-        this.ownerUnlockBusy = false;
+        this.unlockBusy = false;
       }
     },
 
-    async switchOwner(slug) {
-      if (!slug || slug === this.owner) return;
-      const o = this.owners.find((x) => x.slug === slug);
-      // 若另一个 owner 的解锁 modal 还开着（含首屏默认 owner 的弹窗），
-      // 先关掉再去走目标 owner 的流程，否则会出现 promise 串扰 / 双弹窗。
-      if (this.showOwnerUnlockModal && this.ownerUnlockSlug !== slug) {
-        this.cancelOwnerUnlock("superseded");
-      }
-      try {
-        if (o?.web_locked) {
-          // 弹密码；submitOwnerUnlock 成功后会把 activeUnlockToken 替换为新 owner
-          await this.openOwnerUnlockPromise(slug);
-        } else {
-          // 新 owner 无密码：上一个 owner 的授权也不带过去（B：严格独立）
-          this.activeUnlockToken = null;
-        }
-        await this._applyOwnerSwitch(slug);
-      } catch (e) {
-        // 用户取消解锁：保持留在原 owner，不动 activeUnlockToken。
-        if (e && e.message !== "cancelled" && e.message !== "superseded") {
-          this.notify("切换失败：" + (e.message || e), "error");
-        }
-      }
-    },
-
-    async _applyOwnerSwitch(slug) {
-      this.owner = slug;
-      // Clear anything that's owner-scoped so the old subgraph doesn't
-      // bleed into the new tab visually before the fetch returns.
-      this.detail = null;
-      this.paths = [];
-      this.indirect = []; this.contacted = []; this.wishlist = [];
-      this.intent = null; this.activePathKey = null;
-      this.searchActive = false; this.focusSummary = null;
-      this.focusedNodeId = null; this.viewMode = "ambient";
-      this.exitTwoPerson();
-      this.relationships = [];
-      this.relationsTotal = 0;
-      this.cancelEditRelation();
-      if (this.showRelationsDrawer) {
-        this.loadRelationships();
-      }
-      const url = new URL(window.location.href);
-      url.searchParams.set("owner", slug);
-      window.history.replaceState({}, "", url);
-      await this.loadGraph();
-      await this.loadStats();
+    /** Hard navigate to another mount. The full reload guarantees the
+     *  in-memory unlock token is dropped — i.e. "切 tab 必重输". */
+    switchMount(slug) {
+      if (!slug || slug === this.mountSlug) return;
+      window.location.assign(`/r/${slug}/`);
     },
 
     emptyPerson() {
@@ -1512,7 +1508,7 @@ function appState() {
       if (this.batchStarting) return;
       this.batchStarting = true;
       try {
-        const job = await api("/api/enrich/owner", {
+        const job = await api("/api/enrich/start", {
           method: "POST",
           body: { only_missing: this.batchOnlyMissing },
         });
@@ -1573,9 +1569,9 @@ function appState() {
       })[s] || s;
     },
 
-    ownerLabel(slug) {
-      const o = (this.owners || []).find((x) => x.slug === slug);
-      return o ? o.display_name : (slug || "当前用户");
+    mountLabel(slug) {
+      const m = (this.mounts || []).find((x) => x.slug === slug);
+      return m ? m.display_name : (slug || "当前网络");
     },
 
     /* -------- NL relationship parse (modal) -------- */
