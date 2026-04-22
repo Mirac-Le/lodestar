@@ -4,6 +4,23 @@
 
 ---
 
+## [2026-04-23]
+
+### Added
+- **多挂载落地页**：根 URL `/` 在配置了 2 个及以上 `--mount` 时不再加载 1.8k 行 SPA shell，改为渲染轻量 picker 页（标题 + 副标题 + hero 图，Alpine.js 拉 `/api/mounts` 列出所有网络）；单挂载继续 302 跳到唯一 mount。
+
+### Changed
+- **Excel 导入合并为单一 canonical preset**：`lodestar import` 删除 `--preset` 参数；所有 `.xlsx` 共用同一套规则。列名先做 NFKC + 去空白 + alias 归一化（如 `合作价值评分（0-5）` 自动等价于 `合作价值（0-5）`），再按 CORE / PROFILE_BIO / PROFILE_TAGS 三组白名单分发；不在白名单的列丢弃，import 末尾打印 `[import] 已忽略 N 个未识别列：...`。Tommy 表多出的 6 列金融画像（可投金额 / 风险偏好 / 共赢性 / 关系阶段 / 兴趣偏好）以「字段：值 · ...」拼到 `bio`，`核心标签` 进 `tags`。
+- 同步刷新 README 的 Excel 章节与 quickstart contract（**tommy.db = 110 contacts / 156 relationships**），删除所有 `--preset richard|tommy` 提示。
+
+### Fixed
+- **Tommy 网络曾"任意两人之间都没有关系"**：双 preset 时代 `tommy_contacts_preset` 漏配 `peers_column="认识"` + 列名拼错（`身份职位` vs 实际 `职务`），导致 `认识` 列被忽略 → 110 个联系人全部退化成「我」一颗星 → 前端 `hideMeEdgesAmbient` 把所有 me-edge 藏起来后看起来全空。统一 preset 后 tommy.db 重跑回归 110 Me 边 + 46 横向边。
+
+### Removed
+- ⚠️ BREAKING：删除 `richard_network_preset()` / `tommy_contacts_preset()` 公共导出与 CLI `--preset` 选项。外部脚本若 import 这两个名字需改为 `from lodestar.importers import default_preset`。按 AGENTS.md 数据模型一次到位原则，不保留过渡别名。
+
+---
+
 ## [2026-04-22]
 
 ### Added
