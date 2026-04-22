@@ -11,7 +11,10 @@
 - 数据模型或术语调整时**一次到位**：不要保留向后兼容的过渡列、别名或双写逻辑（用户原话："不要向后兼容...不要歧义"、"动数据模型一步到位"）。优先重命名 / 删列 + 同步刷新模板和文档。**导入表**若列格式不合约定（如「认识」列粘连、缺分隔），优先在 Excel/模板侧改规范，而不是为畸形单元格堆叠 importer 特例。
 - 联系人详情页的 bio（行业 / 职务 / 地域 等键值串）用 CSS grid 把 **legend 与 value 分两列对齐**，legend 加粗，避免长串中点 `·` 堆成单行。
 - `examples/` 下的样表 / 模板文件统一**小写英文下划线命名**（如 `richard_network.xlsx`、`tommy_network.xlsx`），不直接放中文文件名。
-- 根目录 `CHANGELOG.md`、能力向页面（如 `docs/product-overview-*.md`）与 `docs/instructions.md`：用准确、自然的中文技术表述，避免机翻腔或误译专业词；不要把一次性口头需求混进 changelog 正文。
+- README 的 **Quick start 是契约**：必须是干净环境里**逐行复制粘贴可跑通的端到端流程**（用户原话："从头生成下，检测是不是和 readme 里写的标准流程一样，放到 quick start 里"）。每次动数据模型 / CLI 表面 / serve 拓扑后，先在干净环境照 README 跑一遍，把"隐含步骤"（建库、`--embed`、`reembed`、密码设置、`--mount` 写法等）补**显式**进去再 commit；不要把"懂行的人才知道还要做 X"留给读者。
+- 根目录 `CHANGELOG.md`、能力向页面（如 `docs/product-overview-*.md`）与 `docs/instructions.md`：用准确、自然的中文技术表述，避免机翻腔或误译专业词（特别是上下文敏感的英文术语，如 `chip` 在 UI / 关系节点语境下不要直译成"芯片"，遇到不确定优先保留原词或问用户）；不要把一次性口头需求混进 changelog 正文。
+- 对外文档（`docs/product-overview-*.md`、`docs/instructions.md`、`CHANGELOG.md`）**不要使用「给老板汇报 / 向老板演示 / 老板视角」等汇报性措辞**，统一改为客观、逻辑清晰的功能描述；流程图优先用 **ASCII 示意图**，方便离线阅读、不依赖截图占位。
+- 默认图谱布局**不得把 Me 节点摆在中心做"自我放射状"扇出**（即"my universe"式以 Me 为太阳、其他节点环绕一周的辐射拓扑）。该回归出现过多次，前端 `app.js` / `style.css` 的 cache-bust tag 用 `YYYYMMDD-no-me-radial-N` 来追踪每次修复；新增 / 重构 layout 时 Me 必须与其他节点平等参与力导布局，不要给 Me 单独安排径向位置。
 
 ## Learned Workspace Facts
 
@@ -20,9 +23,15 @@
 - 对外说明与归档：客观能力说明在 `docs/instructions.md` 与 `docs/product-overview-*.md`（避免主观「心路历程」）；按日完整过程 / 长文报告在 `docs/raw/YYYY-MM-DD-*.md`；用户向按日摘要在根目录 `CHANGELOG.md`（通常链到 raw）。UI 可参考仓库内 `awesome-design-md/`。
 - 关系强度为**单列 `可信度` 0–5**（v3）：`0`=未联系（不建 Me 边、`Person.is_wishlist=True`、仅靠他人「认识」间接连通），`1–5`=已联系。**已废除** `关系类型` 列。`is_wishlist` 为 sticky 派生位；`PathFinder` 等**忽略** `is_wishlist`，只看拓扑。
 - LLM 富化（bio / 公司·职务·城市·标签 / 公司名归一化）用阿里 DashScope（Qwen），**必须先经本地 `Anonymizer` 脱敏**（`Pxxx`/`Cxxx`），回包后再映射回原名；预览、详情「AI 重新解析」、批量富化同链路。
-- 多 owner 共用库：`owner` / `person_owner`、`relationship.owner_id`；各 owner 有独立 `Me`；顶栏 tab 切换 `richard` / `tommy`。每 owner 可设网页标签密码：`uv run lodestar owner web-password <slug> [--set|--clear]`；解锁令牌仅在页内内存，切换 owner 或刷新即失效；多机建议 `.env` 中 `LODESTAR_OWNER_UNLOCK_SECRET`。
+- **一人一库**（v4，2026-04-22 落地）：每个 owner 一个独立 SQLite 文件（`richard.db` / `tommy.db`），文件级 OS 权限就是 ACL，零审计成本（用户原话："OS 文件权限就是 ACL"、"大家都是同事…tommy 和 richard 直接作为端口下一级的 route 即可"）。已**彻底废除** `owner` / `person_owner` 表与 `relationship.owner_id`；`person.is_me` 现在是 `UNIQUE`。`Repository` / `HybridSearch` / `RelationshipParser` / importer / enrich 全部按"当前 repo = 单 owner 命名空间"工作，不再带 `owner_id` 形参。CLI 用全局 `--db <path>`（或 `LODESTAR_DB_PATH`）切库；Web 端 `uv run lodestar serve --mount richard=./richard.db --mount tommy=./tommy.db` 把每个 db 挂在 `/r/<slug>/` 子路由，`LODESTAR_MOUNTS_JSON` 是 `serve` → `create_app()` 的 env-var 桥接（**勿手填**，由 CLI 序列化）。
+- **切 tab 必重输** = 前后端协议：前端从 URL 推断 mount slug，**切 tab 走完整 page reload** 把内存 token 全部清掉、强制重新发该 mount 的 `/api/unlock`；后端把 mount slug 烤进 HMAC 签名（`meta.unlock_secret` per-db，`init_schema` 首次开库随机生成并持久化），mount A 的 token 拿到 mount B 端点会硬 401。这是后端可独立校验的**协议保证**，不靠前端自觉——`tests/test_mount_unlock.py::test_token_from_one_locked_mount_rejected_by_another` 守门。
+- 网页密码：`uv run lodestar --db <path> web-password [--set '…' | --clear | --status]`（已**无** `owner` 子命令、**无** `--owner`）。PBKDF2 哈希 + 每密码独立随机 salt 写在该 db 的 `meta` 表（`web_password_hash` / `web_password_salt`）；未设密码的 mount 直接放行不挑战。旧的 `LODESTAR_OWNER_UNLOCK_SECRET` 全局密钥**已废**，每 db 自己管自己的 secret，cp 走 db 的人把 secret 一起带走，互不相干。
 - `relationship.source`：`manual` > `colleague_inferred` > `ai_inferred`，写入时按优先级保护，避免 AI 覆盖人工。
 - 路径：`Settings.weak_me_floor`（默认 4，`LODESTAR_WEAK_ME_FLOOR`）对低于 floor 的 Me 边加权惩罚；`path_kind` 按**实际选中路径**分类；必要时回退拓扑最短路径。前端路径结果只用 `indirect` 与 `contacted` 两桶（勿再引用已移除的 `direct`/`weak` state，否则 Alpine 会静默失败）。`src/lodestar/web/static/index.html` 中 `style.css` / `app.js` 用 `?v=YYYYMMDD-<tag>` cache-bust，改前端须 bump。
 - Stage-2 `rerank` extra：`transformers` 钉在 `>=4.45,<5.0`（与 `FlagEmbedding`/MiniCPM 兼容）；`torch` 经 `pytorch-cpu` 索引避免拉 CUDA 大包。国内拉 HF 权重设 `HF_ENDPOINT=https://hf-mirror.com` 且 `HF_HUB_DISABLE_XET=1`。国内 PyPI 镜像应写在用户级 `~/.config/uv/uv.toml` 的 `[[index]] default = true`，勿在 `pyproject.toml` 用无效裸 `[[index]]`。
 - 2026-04-21 20 条 golden hybrid 评测（见 `docs/eval_2026-04-21.md`，需已补 embedding）：`bge` 聚合略优于 `llm`，延迟更短；默认推荐 `LODESTAR_RERANKER=bge`，强语义单 query 可临时用 `llm`。`LLMJudgeReranker` **不要**让模型输出下游不消费的字段（如已删除的 `reason`），否则延迟暴涨。
 - **搜索 / 评测前确认 `vec_person_bio` 非空**；否则向量路静默失效、指标偏 keyword-only。可 `uv run lodestar reembed`；`scripts/debug_zero_recall.py` 可拆三路诊断。
+- ⚠️ **`uv run lodestar --db <path> reset --yes` 是硬删该 SQLite 文件**（含 Web UI 手工录入的 peer edges、`colleague_inferred` 边、enrich 结果）。重建后 importer **只**从 xlsx 还原 contacts + Me 边，所有手工连接丢失——曾踩坑：richard 网络 142→63 条 relations，靠 17:36 的 `lodestar.db.bak.YYYYMMDD-HHMMSS` 才救回。安全做法：reset 前先 `cp <path> <path>.bak.$(date +%Y%m%d-%H%M%S)`；一人一库后**没有** `lodestar owner remove`，要"清掉某个 owner"就 `rm <slug>.db`，别拿全局 reset 当"清缓存重建"用。
+- 「用一句话加关系」（关系自然语言解析，Web UI 顶栏「新关系」抽屉）是已落地的真实功能，**不是 placeholder**：自由文本描述谁认识谁 → `Anonymizer` 脱敏 → LLM 解析为结构化关系提案；**不会自动建联系人**——文本中出现的陌生姓名只显示在提示区，需先用「新联系人」录入再回来解析。
+- Stage-2 重排 UI 上的 **L2** 选项当前是占位（灰显 + `TODO` 标记），对应代码路径**未实现**，不要假设它能跑或对其做评测；评测仍以 `none` / `llm` / `bge` 三路为准。
+- `docs/imgs/` 下的临时图按命名约定走 `.gitignore`：`docs/imgs/tmp/` 与 `docs/imgs/page-*` 已忽略（commit `696ebf4`），新增浏览器自动截图 / 草稿截屏沿用这两个前缀就不会被误提交。
