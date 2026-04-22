@@ -4,10 +4,11 @@ We mock `LLMClient.chat_json` so the parse endpoint runs end-to-end
 against the real anonymizer + repository, but never touches the network.
 The list / apply / patch / delete endpoints don't touch the LLM at all.
 
-一人一库后，"isolation" 不再是 endpoint query 参数，而是 mount 前缀。
-两个 owner 各自拥有独立 db，跨 owner 的边在数据上根本不可达，所以这里
-只针对 *单个 mount* 的 list/parse/apply/patch/delete 行为做断言；跨
-mount 的隔离已由 ``test_mount_unlock`` 覆盖。
+With one database per user, "isolation" is not an endpoint query parameter
+but the mount path prefix. Each owner has a separate database, so edges
+across owners are not reachable; these tests only assert
+list/parse/apply/patch/delete behavior for a *single* mount. Cross-mount
+isolation is covered by ``test_mount_unlock``.
 """
 
 from __future__ import annotations
@@ -75,7 +76,7 @@ def setup(
         pids[n] = p.id
 
     # One me-edge (Richard ↔ Alice, manual) + one peer-edge (Carol ↔ Dan,
-    # ai_inferred). 给后续 list / patch / delete 用例用。
+    # ai_inferred) for the list / patch / delete tests below.
     repo.add_relationship(
         Relationship(
             source_id=me.id,
