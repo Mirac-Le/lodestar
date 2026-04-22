@@ -10,7 +10,7 @@
   <!-- ESM 入口：必须先于 alpine.min.js 加载完成，否则 Alpine 解析
        `x-data="appState()"` 时拿不到工厂函数。defer + type=module 能
        保证：先按文档顺序执行 module（含其 import 链），再执行 alpine。 -->
-  <script type="module" src="/static/app.js?v=20260423-focus-panel-hover"></script>
+  <script type="module" src="/static/app.js?v=20260423-focus-hover-1s"></script>
   <script defer src="/static/alpine.min.js"></script>
 </head>
 <body x-data="appState()" x-init="init()" :class="searching ? 'searching' : ''">

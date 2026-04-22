@@ -535,7 +535,7 @@ export function appState() {
       clearTimeout(this.hoverExitTimer);
       this.hoverExitTimer = setTimeout(() => {
         if (!this.searchActive && !this.twoPersonMode && !this.detail) this.enterAmbientMode();
-      }, 420);
+      }, 1000);
     },
 
     onFocusPanelEnter() {
