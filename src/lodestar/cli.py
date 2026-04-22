@@ -346,29 +346,13 @@ def import_spreadsheet(
             help="Auto-connect people sharing a company (strength 4).",
         ),
     ] = True,
-    preset: Annotated[
-        str | None,
-        typer.Option(
-            help=(
-                "Column preset (xlsx 必填): "
-                "'richard' → richard_network.xlsx 这类 13 列通用表 "
-                "（template.xlsx / demo_network.xlsx 也用它）; "
-                "'tommy' → tommy 的 16 列机构合作画像表。"
-            ),
-        ),
-    ] = None,
 ) -> None:
-    """Bulk-import contacts into the current db file. Format auto-detected."""
-    from lodestar.importers import (
-        richard_network_preset,
-        tommy_contacts_preset,
-    )
+    """Bulk-import contacts into the current db file. Format auto-detected.
 
-    preset_map = {
-        "richard": richard_network_preset,
-        "tommy": tommy_contacts_preset,
-    }
-
+    所有 .xlsx 共用同一个内置 preset（列名归一化 + CORE/PROFILE 白名单），
+    不再需要 `--preset` 参数。任何不在白名单里的列会在末尾打印一行
+    `[import] 已忽略 N 个未识别列：...` 提醒。
+    """
     repo, _ = _open_repo()
 
     me = repo.get_me()
@@ -378,20 +362,8 @@ def import_spreadsheet(
 
     suffix = path.suffix.lower()
     if suffix in {".xlsx", ".xls", ".xlsm"}:
-        if preset is None:
-            console.print(
-                f"[red]--preset 必填（xlsx 导入）。[/red] 可选值: {', '.join(preset_map)}."
-            )
-            raise typer.Exit(code=1)
-        if preset not in preset_map:
-            console.print(
-                f"[red]Unknown preset '{preset}'. Choose one of: {', '.join(preset_map)}.[/red]"
-            )
-            raise typer.Exit(code=1)
-        mapping = preset_map[preset]()
         xl = ExcelImporter(
             repo,
-            mapping=mapping,
             infer_colleagues=infer_colleagues,
         )
         stats = xl.import_with_stats(path)

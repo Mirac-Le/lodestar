@@ -33,13 +33,14 @@ uv run lodestar --db ./richard.db init --name "Richard Teng"
 
 # 2) 导入 Richard 的联系人；--embed 务必带，否则 vec_person_bio 为空、
 #    后续 hybrid 检索的向量通道会静默失效（详见 AGENTS.md）。
+#    所有 .xlsx 共用同一个内置 preset，列名归一化 + 白名单驱动，无需指定。
 uv run lodestar --db ./richard.db import \
-    examples/richard_network.xlsx --preset richard --embed
+    examples/richard_network.xlsx --embed
 
-# 3) 同样建好 Tommy 的网络
+# 3) 同样建好 Tommy 的网络（Tommy 的表多了 6 列金融画像，照样直接吃）
 uv run lodestar --db ./tommy.db init --name "Tommy Song"
 uv run lodestar --db ./tommy.db import \
-    examples/tommy_network.xlsx --preset tommy --embed
+    examples/tommy_network.xlsx --embed
 
 # 4) 给两个网络各设一个 web 密码（可选；不设就是无锁）
 uv run lodestar --db ./richard.db web-password --set 'r-secret'
@@ -63,14 +64,14 @@ uv run lodestar serve \
 ```bash
 # CLI 默认 db 路径 = LODESTAR_DB_PATH 或 ~/.local/share/lodestar/lodestar.db
 uv run lodestar init --name "Me"
-uv run lodestar import examples/demo_network.xlsx --preset richard --embed
+uv run lodestar import examples/demo_network.xlsx --embed
 uv run lodestar serve              # 自动以默认 db 单挂在 /r/me/，根 URL 自动跳转
 ```
 
 > **Demo data 可复现**：仓库里的 `examples/*.xlsx` 是真实表的事实源（已脱敏），
 > `*.db` 全部进 `.gitignore`，不入仓。任何时候想重建演示库，跑一遍上面 1-3 步
 > 即可在干净环境重产出 **richard.db = 61 contacts / 142 relationships** 和
-> **tommy.db = 110 contacts / 110 relationships**——这就是 quickstart 的契约。
+> **tommy.db = 110 contacts / 156 relationships**（110 Me 边 + 46 横向「认识」/同事边）——这就是 quickstart 的契约。
 
 **Bi-directional matching**: every contact has a `needs` list. So you can
 also search for *"who would benefit from what I have?"* — if someone's
@@ -124,7 +125,7 @@ also search for *"who would benefit from what I have?"* — if someone's
 |--------------------------------------------|-----------------------------------------------------------------------|
 | `lodestar --db <p> init`                   | 在 `<p>` 创建 db 文件并写入 `me` 单例                                  |
 | `lodestar --db <p> add`                    | 交互式新增一个联系人                                                    |
-| `lodestar --db <p> import file.{csv,xlsx}` | 批量导入；`.xlsx` 必填 `--preset richard\|tommy`                       |
+| `lodestar --db <p> import file.{csv,xlsx}` | 批量导入 csv/xlsx；xlsx 共用一个内置 preset，未识别列末尾会被 warning |
 | `lodestar --db <p> find "我想..."`         | 按目标语义找最优联系人 + 引荐路径                                       |
 | `lodestar --db <p> list / show / delete`   | 联系人 CRUD                                                            |
 | `lodestar --db <p> reembed`                | 重新生成全部 bio embedding（首次/换模型用）                              |
@@ -152,38 +153,51 @@ name, bio, tags, skills, companies, cities, needs, strength, context, frequency,
 - `strength` is an integer 1 (acquaintance) → 5 (very close). Defaults to 3.
 - `frequency` ∈ `weekly | monthly | quarterly | yearly | rare`.
 
-#### Excel — `--preset richard` / `--preset tommy`
+#### Excel — 单一 canonical preset
 
-按数据源 schema 选 preset；xlsx 导入时 `--preset` 必填（CSV 不需要）。
-Preset 命名沿用第一位采用该列结构的 owner 名字，仅做识别，跟"哪本库"无关
-——任何 db 文件都可以导入任意 preset 的表。
+所有 `.xlsx` 共用同一个内置 preset，**没有 `--preset` 参数**。列名先经过
+NFKC + 去空白 + alias 表归一化（例如 `合作价值评分（0-5）` 自动等价于
+canonical 的 `合作价值（0-5）`），再按下面的白名单分发；不在白名单的列
+被丢弃，import 末尾会打印一行 `[import] 已忽略 N 个未识别列：...` 提醒。
 
-**`--preset richard`** — `examples/richard_network.xlsx` 的 13 列通用形态
-（`template.xlsx` / `demo_network.xlsx` 共用同一 schema）：
+**CORE — 13 列基础形态**（`examples/richard_network.xlsx` /
+`examples/template.xlsx` / `examples/demo_network.xlsx` 共用）：
 
 | Column                          | Maps to                                |
 |---------------------------------|----------------------------------------|
 | `姓名`                          | `name` (required)                      |
 | `所属行业`                      | `tags` + 拼进 `bio`                     |
-| `公司`                          | `company` + 拼进 `bio`                  |
+| `公司`                          | `companies` + 拼进 `bio`                |
 | `职务`                          | 拼进 `bio` + `context`                  |
-| `城市`                          | `city` + 拼进 `bio`                     |
+| `城市`                          | `cities` + 拼进 `bio`                   |
 | `AI标准化特征`                  | `tags` (split on `, ， 、 ; ； / ｜`)   |
 | `可信度（言行一致性0-5分）`     | `strength`（0=未联系/wishlist，1-5=已联系） |
 | `合作价值（0-5）`               | 拼到 `bio` 末尾                          |
 | `潜在需求`                      | `needs` ← drives reciprocal matching    |
 | `资源类型`                      | 折进 `tags`                              |
 | `认识`                          | peer-to-peer 边                         |
-| `备注`                          | 拼进 `bio`                               |
+| `备注`                          | 写入 `notes`                            |
 
-**`--preset tommy`** — `examples/tommy_network.xlsx` 的 16 列机构合作画像表
-（列名长且自描述，刻意不规范化）。
+**PROFILE — `examples/tommy_network.xlsx` 在 CORE 之上多出的 6 列**
+（金融画像；其他用户的表里只要列名匹配同样会被吃进来）：
+
+| Column                                   | Lands in | Format                  |
+|------------------------------------------|----------|-------------------------|
+| `单笔可投资金额`                         | `bio`    | `可投金额：<value>`     |
+| `风险承受能力...`                        | `bio`    | `风险偏好：<value>`     |
+| `共赢性...`                              | `bio`    | `共赢性：<value>`       |
+| `关系阶段...`                            | `bio`    | `关系阶段：<value>`     |
+| `兴趣偏好`                               | `bio`    | `兴趣偏好：<value>`     |
+| `核心标签（机构自营；机构fof；...）`     | `tags`   | 业务身份分群标签         |
+
+PROFILE_BIO 字段以 ` · ` 拼接到 bio 末尾，CORE 字段先放，方便在 UI / 检索
+embedding 里快速扫到金融关键事实。
 
 Duplicate rows (same `姓名`) are merged; later rows only add information, never erase.
 
-如果 schema 不同，新增一个 `ColumnMapping` preset 函数（命名按"第一个用这种
-表结构的人 / 来源"）传给 `ExcelImporter(repo, mapping=...)`；不要保留过渡
-别名或双写映射。
+如果未来又冒出新一类列要支持，直接在 `excel_importer.py` 顶部的
+`_PROFILE_BIO_FIELDS` / `_PROFILE_TAG_FIELDS` 里加一行——不要再 fork
+独立的 preset 函数，单一 preset 是契约。
 
 ---
 

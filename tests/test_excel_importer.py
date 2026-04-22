@@ -7,7 +7,7 @@ from pathlib import Path
 import polars as pl
 
 from lodestar.db import Repository
-from lodestar.importers import ExcelImporter, richard_network_preset
+from lodestar.importers import ExcelImporter, default_preset
 
 
 def _make_xlsx(path: Path) -> None:
@@ -31,12 +31,13 @@ def _make_xlsx(path: Path) -> None:
     df.write_excel(path)
 
 
-def test_richard_network_preset_roundtrip(repo: Repository, tmp_path: Path) -> None:
+def test_default_preset_roundtrip(repo: Repository, tmp_path: Path) -> None:
+    """13 列基础形态：与单一 default preset 端到端走通。"""
     repo.ensure_me(name="我")
     xlsx_path = tmp_path / "contacts.xlsx"
     _make_xlsx(xlsx_path)
 
-    importer = ExcelImporter(repo, mapping=richard_network_preset())
+    importer = ExcelImporter(repo, mapping=default_preset())
     count = importer.import_file(xlsx_path)
 
     assert count == 4  # four rows processed
@@ -100,7 +101,7 @@ def test_strength_zero_marks_uncontacted_and_skips_me_edge(
     """The single source of truth for "did I reach this person?" is the
     `可信度` column: 0 → 未联系 (no Me-edge, is_wishlist=True), 1-5 →
     已联系 (Me-edge with that strength). No separate `关系类型` column."""
-    from lodestar.importers import ExcelImporter, richard_network_preset
+    from lodestar.importers import ExcelImporter, default_preset
 
     repo.ensure_me(name="我")
     df = pl.DataFrame({
@@ -111,7 +112,7 @@ def test_strength_zero_marks_uncontacted_and_skips_me_edge(
     xlsx_path = tmp_path / "wish.xlsx"
     df.write_excel(xlsx_path)
 
-    ExcelImporter(repo, mapping=richard_network_preset()).import_file(xlsx_path)
+    ExcelImporter(repo, mapping=default_preset()).import_file(xlsx_path)
 
     star = repo.find_person_by_name("想认识一号")
     assert star is not None
@@ -144,7 +145,7 @@ def test_legacy_关系类型_column_is_silently_ignored(
     and behaviour should be driven purely by `可信度`. We use intentionally
     contradictory values (legacy 关系类型 says one thing, 可信度 says the
     opposite) and assert that 可信度 always wins."""
-    from lodestar.importers import ExcelImporter, richard_network_preset
+    from lodestar.importers import ExcelImporter, default_preset
 
     repo.ensure_me(name="我")
     df = pl.DataFrame({
@@ -158,7 +159,7 @@ def test_legacy_关系类型_column_is_silently_ignored(
     xlsx_path = tmp_path / "legacy.xlsx"
     df.write_excel(xlsx_path)
 
-    ExcelImporter(repo, mapping=richard_network_preset()).import_file(xlsx_path)
+    ExcelImporter(repo, mapping=default_preset()).import_file(xlsx_path)
 
     a = repo.find_person_by_name("A")
     b = repo.find_person_by_name("B")
@@ -170,3 +171,75 @@ def test_legacy_关系类型_column_is_silently_ignored(
     b_rels = [r for r in rels if r.target_id == b.id]
     assert len(a_rels) == 1 and a_rels[0].strength == 3
     assert b_rels == [], "可信度=0 row must not produce a Me-edge"
+
+
+def test_default_preset_absorbs_tommy_profile_columns(
+    repo: Repository, tmp_path: Path,
+) -> None:
+    """Tommy 那 6 列金融画像（曾经只在旧 tommy_contacts_preset 里支持）
+    必须在唯一的 default preset 下也被吃进 bio + tags，且不报"未识别"。"""
+    repo.ensure_me(name="我")
+    df = pl.DataFrame({
+        "姓名": ["林高级"],
+        "所属行业": ["私募fof"],
+        "公司": ["某某资产"],
+        "职务": ["合伙人"],
+        "城市": ["上海"],
+        "可信度（言行一致性0-5分）": [4],
+        "单笔可投资金额": ["3000-5000万"],
+        # 故意带前后空格 + 全角分号，验证 NFKC 归一化
+        "  核心标签（机构自营；机构fof；私募fof；三方机构；家办；个人；券商渠道）": ["私募fof"],
+        "兴趣偏好": ["量化、AI"],
+    })
+    xlsx_path = tmp_path / "profile.xlsx"
+    df.write_excel(xlsx_path)
+
+    ExcelImporter(repo, mapping=default_preset()).import_with_stats(xlsx_path)
+
+    person = repo.find_person_by_name("林高级")
+    assert person is not None
+    assert person.bio is not None
+    # PROFILE_BIO 字段以 「字段：值 · ...」 形式追加
+    assert "可投金额：3000-5000万" in person.bio
+    assert "兴趣偏好：量化、AI" in person.bio
+    # PROFILE_TAGS 字段进 tags
+    assert "私募fof" in person.tags
+
+
+def test_default_preset_warns_on_unknown_columns(
+    repo: Repository, tmp_path: Path, capsys,
+) -> None:
+    """白名单外的列应当被丢掉并在末尾打印一行 `[import] 已忽略 ...`。"""
+    repo.ensure_me(name="我")
+    df = pl.DataFrame({
+        "姓名": ["张三"],
+        "所属行业": ["私募"],
+        "可信度（言行一致性0-5分）": [4],
+        "随便瞎填的字段": ["should-be-ignored"],
+    })
+    xlsx_path = tmp_path / "noise.xlsx"
+    df.write_excel(xlsx_path)
+
+    ExcelImporter(repo, mapping=default_preset()).import_with_stats(xlsx_path)
+    captured = capsys.readouterr().out
+    assert "已忽略" in captured
+    assert "随便瞎填的字段" in captured
+
+
+def test_header_aliases_are_normalized(repo: Repository, tmp_path: Path) -> None:
+    """`合作价值评分（0-5）`（带"评分"二字、全角括号）应等价于
+    canonical `合作价值（0-5）`，并被拼到 bio 末尾。"""
+    repo.ensure_me(name="我")
+    df = pl.DataFrame({
+        "姓名": ["王五"],
+        "所属行业": ["银行"],
+        "可信度（言行一致性0-5分）": [3],
+        "合作价值评分（0-5）": [4],  # alias 形式
+    })
+    xlsx_path = tmp_path / "alias.xlsx"
+    df.write_excel(xlsx_path)
+
+    ExcelImporter(repo, mapping=default_preset()).import_file(xlsx_path)
+    wang = repo.find_person_by_name("王五")
+    assert wang is not None
+    assert wang.bio is not None and "合作价值：4/5" in wang.bio

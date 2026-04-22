@@ -1,21 +1,29 @@
-"""Excel (.xlsx) importer with flexible column mapping.
+"""Excel (.xlsx) importer，单一 canonical preset。
 
-Two built-in presets, **按 owner 命名**：
+设计原则：**一张表配一套规则**。
 
-* `richard_network_preset()` — `examples/richard_network.xlsx` 的 13 列
-  通用形态（也是 `template.xlsx` / `demo_network.xlsx` 共用模板）：
+整个项目共享一份 13 列基础模板（`examples/richard_network.xlsx` /
+`examples/template.xlsx`）。Tommy 那套金融机构画像表是它的**严格超集**
+——多出 6 列「可投金额 / 风险偏好 / 共赢性 / 关系阶段 / 兴趣偏好 /
+核心标签」，没有任何冲突字段。
 
-      序号 | 姓名 | 所属行业 | 公司 | 职务 | 城市 | AI标准化特征 |
-      可信度（言行一致性0-5分）| 合作价值（0-5）| 潜在需求 | 资源类型 |
-      认识 | 备注
+因此 importer 只维护**一个** `default_preset()`，列处理分三类：
 
-  其中 `认识` 列由 importer 解析为 peer-to-peer 边。
+  CORE       —— 直接进 Person 字段
+  PROFILE_BIO —— 拼到 bio 末尾，格式 "字段：值 · 字段：值"
+  PROFILE_TAGS —— 进 tags（少量、可枚举的业务身份）
 
-* `tommy_contacts_preset()` — Tommy 的 `tommy_network.xlsx`（16 列机构
-  合作画像表，列名长且自描述，刻意不规范化）。
+任何不在白名单里的列：丢掉，import 末尾打印 "已忽略以下列" 警告。
 
-任何 owner 若未来需要 schema 不同的 preset，再 fork 一个独立函数；
-**禁止**保留过渡别名或双写映射（参见 `AGENTS.md`：数据模型一次到位）。
+**为什么不再分 preset？** 历史上有 `richard_network_preset` /
+`tommy_contacts_preset` 两个函数，但它们的实际差异只是 tommy 多了 6 列，
+而 tommy preset 还配错了一堆列名（`身份职位` vs 实际 `职务`），导致
+「认识」列被忽略 → tommy.db 里 0 条 contact↔contact 边 → 网页打开像
+完全空。一份 preset、白名单驱动可以同时解决：维护成本、tommy bug、
+未来用户用模板填部分列时的兼容性。
+
+列名归一化：去全/半角空格、统一别名（如 `合作价值评分（0-5）` →
+`合作价值（0-5）`），让填表人不必跟字符级别较真。
 
 If the workbook has a second sheet named `关系` (or `edges`) with columns
 `(甲, 乙, 强度, 关系, 频率)`, those rows are imported as authoritative
@@ -28,6 +36,7 @@ company also gets a strong (default = 4) edge.
 from __future__ import annotations
 
 import re
+import unicodedata
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -170,123 +179,165 @@ class ColumnMapping:
     peers_column: str | None = None
 
 
-def tommy_contacts_preset() -> ColumnMapping:
-    """Mapping for Tommy's raw `tommy_network.xlsx` (16 columns;
-    historically `contacts.xlsx`).
+# ---------------------------------------------------------------------------
+# Header normalization & canonical preset
+# ---------------------------------------------------------------------------
+#
+# 所有判定都基于「归一化后的列名」：
+#   - 去除全/半角空白
+#   - NFKC unicode 折叠（全角字符 → 半角等价物）
+#   - 统一别名（同语义不同写法）
+#
+# 这样使用者填表时不必跟字符级别较真，"合作价值评分（0-5）" 与
+# "合作价值（0-5）" 会被识别成同一列。
+_HEADER_ALIASES: dict[str, str] = {
+    # canonical name : 任何会归一化到 canonical 的别名 / 旧写法
+    "合作价值（0-5）": "合作价值评分（0-5）",
+    # NOTE: `可信度（言行一致性0-5分）` vs `可信度（言行一致性 0-5分）`
+    # 仅差一个空格，归一化阶段会自动 strip，无需在此显式列出。
+}
 
-    The original column names are long and partly self-documenting (e.g.
-    "可信度（承诺一致性 0-5分）"), so we hard-code the long forms here
-    rather than asking Tommy to rename anything before import.
 
-    Compared to `richard_network_preset` we additionally fold:
-      - 单笔可投资金额 / 风险承受能力 / 共赢性 / 关系阶段 → bio
-      - 资源类型 / 核心标签 / 可合作业务范围 / 兴趣偏好 → tags
-      - 合作价值评分（0-5） → bio (`合作价值：X/5`)
-    so the rich qualitative columns survive into both keyword search and
-    the embedding text without expanding the DB schema.
+def _normalize_header(raw: object) -> str:
+    """Map a raw header cell to a canonical comparable form.
+
+    步骤：
+      1. None / 空 → ""
+      2. NFKC：全角空格、全角括号、全角分号等 → 半角等价
+      3. 去掉所有空白字符（空格、tab、零宽空格等）
+      4. 应用 alias 表把别名收敛到唯一 canonical 写法
     """
+    if raw is None:
+        return ""
+    text = unicodedata.normalize("NFKC", str(raw))
+    text = re.sub(r"\s+", "", text)
+    if not text:
+        return ""
+    # alias 表的 key/value 也走一遍归一化，保证用 "合作价值评分（0-5）"
+    # 这种带全角括号的别名时也能命中
+    for canonical, alias in _HEADER_ALIASES.items():
+        alias_n = re.sub(r"\s+", "", unicodedata.normalize("NFKC", alias))
+        canonical_n = re.sub(r"\s+", "", unicodedata.normalize("NFKC", canonical))
+        if text == alias_n:
+            return canonical_n
+    return text
 
-    industry_col = "行业"
-    role_col = "身份职位"
-    bg_col = "主要背景"
-    region_col = "地域"
-    money_col = "单笔可投资金额"
-    risk_col = (
-        "风险承受能力激进（可接受高回撤，追求高收益）、平衡（兼顾收益与风险）、"
-        "稳健（低回撤优先，收益次之）"
-    )
-    win_col = (
-        "共赢性（长：动机纯粹、追求长期共赢、中：有短期诉求，不排斥长期、"
-        "短：动机不纯、仅追求短期利益）"
-    )
-    value_col = "合作价值评分（0-5）"
-    stage_col = (
-        "关系阶段（A：有良好合作基础；B：未合作但熟悉；C：未合作且不熟悉；D:合作过但结果较差）"
-    )
-    label_col = "核心标签（机构自营；机构fof；私募fof；三方机构；家办；个人；券商渠道）"
-    biz_col = "可合作业务范围"
-    interest_col = "兴趣偏好"
-    resource_col = "资源类型（资金 / 项目 / 服务 / 技术 / 人脉）"
+
+# CORE 字段：与 Person dataclass 字段直接对应。
+# 值是 canonical 归一化形式（注意全角括号经 NFKC 后变半角）。
+_CORE_NAME = _normalize_header("姓名")
+_CORE_NOTES = _normalize_header("备注")
+_CORE_STRENGTH = _normalize_header("可信度（言行一致性0-5分）")
+_CORE_CONTEXT = _normalize_header("职务")
+_CORE_PEERS = _normalize_header("认识")
+_CORE_COMPANIES = [_normalize_header(c) for c in ("公司",)]
+_CORE_CITIES = [_normalize_header(c) for c in ("城市",)]
+_CORE_NEEDS = [_normalize_header(c) for c in ("潜在需求",)]
+_CORE_TAGS = [_normalize_header(c) for c in ("所属行业", "AI标准化特征", "资源类型")]
+# 只用于 compose_bio 的 CORE 列（不会自动进其他字段）
+_CORE_BIO_LOOKUP_KEYS = [
+    _normalize_header(c) for c in ("所属行业", "职务", "公司", "城市", "合作价值（0-5）")
+]
+
+# PROFILE_BIO：金融画像的定量/定性自由文本，拼到 bio 末尾。
+# (label_for_bio, normalized_column_name)
+_PROFILE_BIO_FIELDS: list[tuple[str, str]] = [
+    ("可投金额", _normalize_header("单笔可投资金额")),
+    (
+        "风险偏好",
+        _normalize_header(
+            "风险承受能力激进（可接受高回撤，追求高收益）、平衡（兼顾收益与风险）、"
+            "稳健（低回撤优先，收益次之）"
+        ),
+    ),
+    (
+        "共赢性",
+        _normalize_header(
+            "共赢性（长：动机纯粹、追求长期共赢、中：有短期诉求，不排斥长期、"
+            "短：动机不纯、仅追求短期利益）"
+        ),
+    ),
+    (
+        "关系阶段",
+        _normalize_header(
+            "关系阶段（A：有良好合作基础；B：未合作但熟悉；C：未合作且不熟悉；"
+            "D:合作过但结果较差）"
+        ),
+    ),
+    ("兴趣偏好", _normalize_header("兴趣偏好")),
+]
+
+# PROFILE_TAGS：少量、真正用来分群的业务身份。
+_PROFILE_TAG_FIELDS: list[str] = [
+    _normalize_header("核心标签（机构自营；机构fof；私募fof；三方机构；家办；个人；券商渠道）"),
+]
+
+# 仅用于忽略列计算：所有"已知"列名集合（CORE + PROFILE）。
+# 任何其他列在 import 末尾会被 warning 提示。
+_KNOWN_NORMALIZED_HEADERS: set[str] = (
+    {
+        _CORE_NAME,
+        _CORE_NOTES,
+        _CORE_STRENGTH,
+        _CORE_CONTEXT,
+        _CORE_PEERS,
+    }
+    | set(_CORE_COMPANIES)
+    | set(_CORE_CITIES)
+    | set(_CORE_NEEDS)
+    | set(_CORE_TAGS)
+    | {key for _, key in _PROFILE_BIO_FIELDS}
+    | set(_PROFILE_TAG_FIELDS)
+    | {_normalize_header("合作价值（0-5）")}
+    # 表内常见的 housekeeping 列，不算 unknown：
+    | {_normalize_header(c) for c in ("序号", "id", "ID")}
+)
+
+
+def default_preset() -> ColumnMapping:
+    """The single canonical preset used for every spreadsheet import.
+
+    覆盖：
+      - `examples/richard_network.xlsx` 的 13 列基础形态
+      - `examples/tommy_network.xlsx` 在此之上多出的 6 列金融画像
+      - 任何只填了部分列的子集模板
+
+    设计点见 module docstring。
+    """
 
     def compose_bio(row: dict[str, object]) -> str | None:
         parts: list[str] = []
+        # 先放 CORE 5 列，跟旧 richard preset 输出顺序一致
         for label, key in (
-            ("行业", industry_col),
-            ("职务", role_col),
-            ("地域", region_col),
-            ("背景", bg_col),
-            ("可投金额", money_col),
-            ("风险偏好", risk_col),
-            ("共赢性", win_col),
-            ("关系阶段", stage_col),
+            ("行业", _normalize_header("所属行业")),
+            ("职务", _normalize_header("职务")),
+            ("公司", _normalize_header("公司")),
+            ("城市", _normalize_header("城市")),
         ):
             v = _cell(row.get(key))
             if v:
                 parts.append(f"{label}：{v}")
-        v = _cell(row.get(value_col))
-        if v:
-            parts.append(f"合作价值：{v}/5")
+        coop = _cell(row.get(_normalize_header("合作价值（0-5）")))
+        if coop:
+            parts.append(f"合作价值：{coop}/5")
+        # 然后追加 PROFILE_BIO（金融用户填了就吃，没填就跳过）
+        for label, key in _PROFILE_BIO_FIELDS:
+            v = _cell(row.get(key))
+            if v:
+                parts.append(f"{label}：{v}")
         return " · ".join(parts) if parts else None
 
     return ColumnMapping(
-        name="姓名",
+        name=_CORE_NAME,
         bio=compose_bio,
-        tags=[industry_col, label_col, biz_col, resource_col, interest_col],
-        cities=[region_col],
-        needs=["潜在需求"],
-        strength_column="可信度（承诺一致性 0-5分）",
-        context_column=role_col,
-    )
-
-
-def richard_network_preset() -> ColumnMapping:
-    """Preset for `examples/richard_network.xlsx` 的 13 列形态，也是
-    `examples/template.xlsx` / `examples/demo_network.xlsx` 共用的通用模板。
-
-    列：序号 · 姓名 · 所属行业 · 公司 · 职务 · 城市 · AI标准化特征 ·
-        可信度（言行一致性0-5分）· 合作价值（0-5）· 潜在需求 · 资源类型 ·
-        认识 · 备注
-
-    特点：
-      - `合作价值（0-5）` → 拼到 bio 末尾，例如 `合作价值：4/5`
-      - `资源类型`        → 折进 tags（与「所属行业」「AI 标准化特征」
-                            一起组成 tag 集合）
-      - `认识`            → 由 importer 解析为 peer-to-peer 边
-
-    任意列缺失 importer 都会优雅跳过；新增 owner 若 schema 与之相同，
-    可直接复用本 preset，不必再造轮子。
-    """
-
-    def compose_bio(row: dict[str, object]) -> str | None:
-        parts: list[str] = []
-        industry = _cell(row.get("所属行业"))
-        role = _cell(row.get("职务"))
-        company = _cell(row.get("公司"))
-        city = _cell(row.get("城市"))
-        cooperation = _cell(row.get("合作价值（0-5）"))
-        if industry:
-            parts.append(f"行业：{industry}")
-        if role:
-            parts.append(f"职务：{role}")
-        if company:
-            parts.append(f"公司：{company}")
-        if city:
-            parts.append(f"城市：{city}")
-        if cooperation:
-            parts.append(f"合作价值：{cooperation}/5")
-        return " · ".join(parts) if parts else None
-
-    return ColumnMapping(
-        name="姓名",
-        bio=compose_bio,
-        notes="备注",
-        tags=["所属行业", "AI标准化特征", "资源类型"],
-        companies=["公司"],
-        cities=["城市"],
-        needs=["潜在需求"],
-        strength_column="可信度（言行一致性0-5分）",
-        context_column="职务",
-        peers_column="认识",
+        notes=_CORE_NOTES,
+        tags=list(_CORE_TAGS) + list(_PROFILE_TAG_FIELDS),
+        companies=list(_CORE_COMPANIES),
+        cities=list(_CORE_CITIES),
+        needs=list(_CORE_NEEDS),
+        strength_column=_CORE_STRENGTH,
+        context_column=_CORE_CONTEXT,
+        peers_column=_CORE_PEERS,
     )
 
 
@@ -306,6 +357,34 @@ def _read_any_spreadsheet(path: str | Path) -> pl.DataFrame:
     if suffix == ".csv":
         return pl.read_csv(path, infer_schema_length=0)
     raise ValueError(f"Unsupported spreadsheet format: {suffix}")
+
+
+def _normalize_dataframe_headers(df: pl.DataFrame) -> tuple[pl.DataFrame, dict[str, str]]:
+    """Rename df columns to their canonical normalized form.
+
+    Returns the renamed df plus the original→canonical mapping so the
+    caller can later compute "which raw columns were ignored".
+
+    重名冲突：如果两个原始列归一化到同一 canonical 写法（例如同时填了
+    `合作价值（0-5）` 和 `合作价值评分（0-5）`），第一次出现的胜出，
+    后续重复的列保留原名以保证 dataframe rename 不报错——它会自动
+    出现在 unknown 列里被 warning 出来。
+    """
+    new_names: list[str] = []
+    seen: set[str] = set()
+    raw_to_canonical: dict[str, str] = {}
+    for raw in df.columns:
+        canonical = _normalize_header(raw)
+        if canonical and canonical not in seen:
+            seen.add(canonical)
+            new_names.append(canonical)
+            raw_to_canonical[raw] = canonical
+        else:
+            # empty header or duplicate — keep raw to avoid pl.rename collision
+            new_names.append(raw)
+            if canonical:
+                raw_to_canonical[raw] = raw  # surface as "ignored" later
+    return df.rename(dict(zip(df.columns, new_names))), raw_to_canonical
 
 
 def _read_relations_sheet(path: str | Path) -> pl.DataFrame | None:
@@ -350,7 +429,7 @@ class ExcelImporter:
         colleague_strength: int = 4,
     ) -> None:
         self._repo = repo
-        self._mapping = mapping or richard_network_preset()
+        self._mapping = mapping or default_preset()
         self._infer_colleagues = infer_colleagues
         self._colleague_strength = colleague_strength
 
@@ -367,10 +446,21 @@ class ExcelImporter:
             )
 
         df = _read_any_spreadsheet(path)
+        df, raw_to_canonical = _normalize_dataframe_headers(df)
+
         if self._mapping.name not in df.columns:
             raise ValueError(
-                f"Required column '{self._mapping.name}' not found. Available columns: {df.columns}"
+                f"Required column '{self._mapping.name}' not found. "
+                f"Available columns (after normalization): {df.columns}"
             )
+
+        # 在 import 末尾打印「这些列我看见了但没用」提示，方便用户发现
+        # 自己填了一列结果没生效（typo / 多余字段 / 旧版 schema）。
+        ignored_pairs: list[tuple[str, str]] = []
+        for raw, canonical in raw_to_canonical.items():
+            if canonical and canonical not in _KNOWN_NORMALIZED_HEADERS:
+                ignored_pairs.append((raw, canonical))
+        self._ignored_columns = ignored_pairs
 
         # Pass 1 — upsert people + Me-edges.
         people_count = 0
@@ -390,6 +480,10 @@ class ExcelImporter:
         colleague_count = 0
         if self._infer_colleagues:
             colleague_count = self._infer_colleague_edges(me_id=me.id)
+
+        if self._ignored_columns:
+            cols = ", ".join(f"'{raw}'" for raw, _ in self._ignored_columns)
+            print(f"[import] 已忽略 {len(self._ignored_columns)} 个未识别列：{cols}")
 
         return ImportStats(
             people=people_count,
