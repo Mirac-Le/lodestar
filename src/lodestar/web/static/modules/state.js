@@ -526,12 +526,30 @@ export function appState() {
       clearTimeout(this.hoverExitTimer);
       this.enterFocusMode(node, nodeEle);
     },
+    /** Leaving the cytoscape node fires immediately; the 速览 card is
+     *  fixed top-right, so the pointer must cross the canvas before
+     *  reaching「打开档案」. Keep the card alive long enough, and let
+     *  `onFocusPanelEnter` cancel the timer once the pointer hits the panel. */
     handleNodeExit() {
       if (this.searchActive || this.twoPersonMode || this.detail) return;
       clearTimeout(this.hoverExitTimer);
       this.hoverExitTimer = setTimeout(() => {
         if (!this.searchActive && !this.twoPersonMode && !this.detail) this.enterAmbientMode();
-      }, 70);
+      }, 420);
+    },
+
+    onFocusPanelEnter() {
+      if (this.searchActive || this.twoPersonMode || this.detail) return;
+      clearTimeout(this.hoverExitTimer);
+    },
+
+    onFocusPanelLeave() {
+      if (this.searchActive || this.twoPersonMode || this.detail) return;
+      if (this.viewMode !== "focus") return;
+      clearTimeout(this.hoverExitTimer);
+      this.hoverExitTimer = setTimeout(() => {
+        if (!this.searchActive && !this.twoPersonMode && !this.detail) this.enterAmbientMode();
+      }, 160);
     },
     enterAmbientMode() {
       this.viewMode = "ambient";
