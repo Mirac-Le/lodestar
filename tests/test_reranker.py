@@ -168,10 +168,26 @@ def test_llm_judge_drops_unknown_tokens(repo: Repository) -> None:
     assert {c.person_id for c in out} == {a, b}
 
 
+def _isolate_settings(monkeypatch: pytest.MonkeyPatch) -> None:
+    """关掉 .env 文件加载，避免开发机里的 ``LODESTAR_*`` 漏进 settings。
+
+    pydantic-settings 的优先级是 init kwargs > env vars > .env 文件 > defaults，
+    单独 ``monkeypatch.delenv`` 只清进程 env，``.env`` 仍会被读到——这一直
+    是 test_build_reranker_factory_* 的 flake 来源。这里把 model_config 里
+    的 ``env_file`` 暂时打成 None，这次测试就不再读 ``.env``。
+    """
+    from lodestar import config
+
+    new_cfg = dict(config.Settings.model_config)
+    new_cfg["env_file"] = None
+    monkeypatch.setattr(config.Settings, "model_config", new_cfg)
+
+
 def test_build_reranker_factory_defaults_to_noop(monkeypatch: pytest.MonkeyPatch) -> None:
     """No env var → NoopReranker; bad LLM config gracefully falls back too."""
     from lodestar import config
 
+    _isolate_settings(monkeypatch)
     monkeypatch.delenv("LODESTAR_RERANKER", raising=False)
     config.reset_settings()
     try:
@@ -185,6 +201,7 @@ def test_build_reranker_factory_llm_no_apikey_falls_back(
 ) -> None:
     from lodestar import config
 
+    _isolate_settings(monkeypatch)
     monkeypatch.setenv("LODESTAR_RERANKER", "llm")
     monkeypatch.setenv("LODESTAR_LLM_API_KEY", "")
     config.reset_settings()
@@ -195,9 +212,27 @@ def test_build_reranker_factory_llm_no_apikey_falls_back(
         config.reset_settings()
 
 
-def test_bge_reranker_optional_dep_guard() -> None:
-    """BgeReranker 依赖 FlagEmbedding，未装时模块仍能 import，仅构造时失败。"""
+def test_bge_reranker_optional_dep_guard(monkeypatch: pytest.MonkeyPatch) -> None:
+    """BgeReranker 在 FlagEmbedding 已装时可被构造；模型加载是 lazy 的。
+
+    真去 ``BAAI/bge-reranker-v2-m3``（~560MB）下载会让 CI / 裸网开发机
+    挂住，所以这里 stub 掉 ``FlagReranker`` 的真实加载，只验证我们的
+    lazy-import 链路本身没断。
+    """
     pytest.importorskip("FlagEmbedding")
+    import FlagEmbedding
+
+    class _StubFlagReranker:
+        def __init__(self, *_a: object, **_kw: object) -> None:
+            pass
+
+        def compute_score(
+            self, _pairs: list[tuple[str, str]], normalize: bool = True
+        ) -> list[float]:
+            return [0.5 for _ in _pairs]
+
+    monkeypatch.setattr(FlagEmbedding, "FlagReranker", _StubFlagReranker)
+
     from lodestar.search.bge_reranker import BgeReranker
 
     bge = BgeReranker()
