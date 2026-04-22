@@ -234,6 +234,30 @@ function applyFocusState(nodeId) {
   const meIdRaw = meNode.length > 0 ? meNode.first().id() : (window.app?.graph?.me_id != null ? window.app.graph.me_id : null);
   const meIdStr = meIdRaw != null ? String(meIdRaw) : null;
   const centerIdStr = String(center.id());
+
+  /* Hover/focus 中心是「我」时：保留 Me 节点圆形高亮，但不要画出任何
+     放射状的 Me 边——之前对几十～上百个联系人全亮 me-edge 视觉上像刺猬，
+     用户多次反馈不想要。其他节点统一 ambient-muted，等用户进入具体目标
+     或路径时再点亮链路。 */
+  if (meIdStr && centerIdStr === meIdStr) {
+    cy.batch(() => {
+      resetGraphState();
+      cy.nodes().forEach((n) => {
+        if (n.style("display") === "none") return;
+        if (String(n.id()) === centerIdStr) n.addClass("focus-node label-visible");
+        else n.addClass("ambient-muted label-hidden");
+      });
+      cy.edges().forEach((e) => {
+        if (e.data("is_me_edge")) {
+          e.style("display", "none");
+        } else {
+          e.addClass("ambient-muted");
+        }
+      });
+    });
+    return buildFocusSummary(center.data("raw"), center);
+  }
+
   const neighborNodes = center.neighborhood("node");
   const connectedEdges = center.connectedEdges();
   const visibleNodeIds = new Set([centerIdStr, ...neighborNodes.map((n) => String(n.id()))]);
@@ -259,24 +283,12 @@ function applyFocusState(nodeId) {
         e.style("display", "none");
         return;
       }
-      let show = false;
-      /* Hover/focus 中心是「我」时：仍画出所有 Me 边，但下面只对
-         strength >= weak_me_floor 的边打高亮，否则弱边会像刺猬一样全白，
-         和路径里「弱直连要引荐」的语义不一致。 */
-      if (meIdStr && centerIdStr === meIdStr) show = epOk;
-      else if (meIdStr) show = (s === meIdStr && t === centerIdStr) || (t === meIdStr && s === centerIdStr);
+      const show = meIdStr ? ((s === meIdStr && t === centerIdStr) || (t === meIdStr && s === centerIdStr)) : false;
       e.style("display", show ? "element" : "none");
     });
-    const floor = window.app?.graph?.weak_me_floor ?? 4;
     cy.edges().forEach((e) => {
       if (e.style("display") === "none") return;
       const eid = String(e.id());
-      if (e.data("is_me_edge") && meIdStr && centerIdStr === meIdStr) {
-        const str = e.data("strength") || 0;
-        if (str >= floor && visibleEdgeIds.has(eid)) e.addClass("focus-edge");
-        else e.addClass("ambient-muted");
-        return;
-      }
       if (visibleEdgeIds.has(eid)) e.addClass("focus-edge");
       else e.addClass("ambient-muted");
     });
@@ -609,6 +621,10 @@ function appState() {
     showAdd: false,
     showIntros: false,
     twoPersonMode: false,
+    pathStartInput: "",
+    pathEndInput: "",
+    pathStartFocused: false,
+    pathEndFocused: false,
     pathMode: false,
     pathStart: null,
     pathEnd: null,
@@ -1051,11 +1067,16 @@ function appState() {
       if (this.twoPersonMode) {
         if (!this.pathStart) {
           this.pathStart = node;
+          this.pathStartInput = node.label;
         } else if (!this.pathEnd && node.id !== this.pathStart.id) {
           this.pathEnd = node;
+          this.pathEndInput = node.label;
           await this.runTwoPersonPath();
         } else {
-          this.pathStart = node; this.pathEnd = null;
+          this.pathStart = node;
+          this.pathStartInput = node.label;
+          this.pathEnd = null;
+          this.pathEndInput = "";
         }
         return;
       }
@@ -1174,14 +1195,82 @@ function appState() {
     /* -------- two person path -------- */
     enterTwoPerson() {
       this.twoPersonMode = true; this.pathStart = null; this.pathEnd = null;
+      this.pathStartInput = ""; this.pathEndInput = "";
+      this.pathStartFocused = false; this.pathEndFocused = false;
       this.searchActive = false;
       this.focusSummary = null;
       this.viewMode = "ambient";
-      clearHighlights(); this.notify("点击起点和终点");
+      clearHighlights(); this.notify("输入两个名字（带补全），或在图上依次点起点终点");
     },
     exitTwoPerson() {
       this.twoPersonMode = false; this.pathStart = null; this.pathEnd = null;
+      this.pathStartInput = ""; this.pathEndInput = "";
+      this.pathStartFocused = false; this.pathEndFocused = false;
       if (!this.searchActive) this.enterAmbientMode();
+    },
+    pairMatches(q) {
+      const nodes = (this.graph && this.graph.nodes) || [];
+      const raw = (q || "").trim().toLowerCase();
+      if (!raw) {
+        // 空查询：列前 50 个，避免一次性塞几百行 DOM；输入后再放开
+        return nodes.slice(0, 50);
+      }
+      return nodes.filter((n) => (n.label || "").toLowerCase().includes(raw));
+    },
+    pickPathEndpoint(which, node) {
+      if (which === "start") {
+        this.pathStartInput = node.label;
+        this.pathStartFocused = false;
+      } else {
+        this.pathEndInput = node.label;
+        this.pathEndFocused = false;
+      }
+      this.resolvePathEndpoint(which);
+    },
+    hidePairSuggest(which) {
+      // 延迟关闭，给 mousedown 选择留出时间
+      setTimeout(() => {
+        if (which === "start") this.pathStartFocused = false;
+        else this.pathEndFocused = false;
+      }, 120);
+    },
+    resolvePathEndpoint(which) {
+      const raw = (which === "start" ? this.pathStartInput : this.pathEndInput).trim();
+      if (!raw) {
+        if (which === "start") this.pathStart = null;
+        else this.pathEnd = null;
+        return;
+      }
+      const nodes = (this.graph && this.graph.nodes) || [];
+      const lc = raw.toLowerCase();
+      const exact = nodes.filter((n) => (n.label || "").toLowerCase() === lc);
+      let pick = exact[0];
+      if (!pick) {
+        pick = nodes.find((n) => (n.label || "").toLowerCase().includes(lc));
+      }
+      if (!pick) {
+        this.notify(`找不到「${raw}」，请检查名字`, "error");
+        return;
+      }
+      if (exact.length > 1) {
+        this.notify(`「${raw}」有 ${exact.length} 人同名，已用 id=${pick.id}`, "info", 3500);
+      }
+      const other = which === "start" ? this.pathEnd : this.pathStart;
+      if (other && other.id === pick.id) {
+        this.notify("起点和终点不能是同一个人", "error");
+        return;
+      }
+      const node = { id: pick.id, label: pick.label };
+      if (which === "start") {
+        this.pathStart = node;
+        this.pathStartInput = pick.label;
+      } else {
+        this.pathEnd = node;
+        this.pathEndInput = pick.label;
+      }
+      if (this.pathStart && this.pathEnd && this.pathStart.id !== this.pathEnd.id) {
+        this.runTwoPersonPath();
+      }
     },
     async runTwoPersonPath() {
       try {
@@ -1236,6 +1325,8 @@ function appState() {
         this.twoPersonMode = false;
         this.pathStart = null;
         this.pathEnd = null;
+        this.pathStartInput = "";
+        this.pathEndInput = "";
       } catch (e) {
         this.notify(e.message, "error");
       }

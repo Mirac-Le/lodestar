@@ -1043,6 +1043,48 @@ button { cursor: pointer; }
   border: 1px solid var(--border);
   font-family: var(--font-mono); font-size: 12px;
 }
+.mode-banner .pair-field {
+  position: relative; display: inline-block;
+}
+.mode-banner .pair-input {
+  background: var(--bg-overlay); color: var(--text);
+  border: 1px solid var(--border); border-radius: 4px;
+  padding: 3px 8px; font-size: 12.5px; min-width: 180px;
+  font-family: inherit; outline: none;
+  transition: border-color 0.12s ease;
+}
+.mode-banner .pair-input::placeholder { color: var(--text-muted); }
+.mode-banner .pair-input:focus { border-color: var(--accent); }
+.mode-banner .pair-suggest {
+  position: absolute; top: calc(100% + 4px); left: 0;
+  min-width: 100%;
+  max-height: 260px; overflow-y: auto;
+  background: var(--bg-elevated);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  box-shadow: var(--shadow-md);
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
+  z-index: 80;
+  padding: 4px 0;
+}
+.mode-banner .pair-suggest-row {
+  padding: 4px 10px;
+  font-size: 12.5px; color: var(--text);
+  cursor: pointer;
+  display: flex; align-items: center;
+  transition: background 0.08s ease, color 0.08s ease;
+}
+.mode-banner .pair-suggest-row:hover {
+  background: var(--bg-overlay); color: var(--text);
+}
+.mode-banner .pair-suggest-row .name { font-weight: 510; }
+/* 滚动条统一暗色 */
+.mode-banner .pair-suggest::-webkit-scrollbar { width: 6px; }
+.mode-banner .pair-suggest::-webkit-scrollbar-track { background: transparent; }
+.mode-banner .pair-suggest::-webkit-scrollbar-thumb {
+  background: var(--border); border-radius: 3px;
+}
 .mode-banner > span:first-child {
   color: var(--text); font-weight: 590; letter-spacing: -0.012em;
 }

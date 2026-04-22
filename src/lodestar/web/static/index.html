@@ -4,10 +4,10 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1">
   <title>Lodestar — Personal Network Navigator</title>
-  <link rel="stylesheet" href="/static/style.css?v=20260422-onelib">
+  <link rel="stylesheet" href="/static/style.css?v=20260423-pair-suggest">
   <script src="/static/cytoscape.min.js"></script>
   <script src="/static/echarts.min.js"></script>
-  <script defer src="/static/app.js?v=20260422-onelib"></script>
+  <script defer src="/static/app.js?v=20260423-pair-suggest-scroll"></script>
   <script defer src="/static/alpine.min.js"></script>
 </head>
 <body x-data="appState()" x-init="init()" :class="searching ? 'searching' : ''">
@@ -200,9 +200,41 @@
   <template x-if="twoPersonMode">
     <div class="mode-banner">
       <span>双人路径</span>
-      <span class="pill" x-text="pathStart ? pathStart.label : '点击起点'"></span>
+      <div class="pair-field">
+        <input class="pair-input" type="text"
+               x-model="pathStartInput"
+               @focus="pathStartFocused = true"
+               @blur="hidePairSuggest('start')"
+               @input="pathStartFocused = true"
+               @keydown.enter.prevent="resolvePathEndpoint('start')"
+               @keydown.escape="pathStartFocused = false"
+               placeholder="起点：输入名字或点图" />
+        <div class="pair-suggest" x-show="pathStartFocused && pairMatches(pathStartInput).length > 0" x-transition.opacity>
+          <template x-for="m in pairMatches(pathStartInput)" :key="m.id">
+            <div class="pair-suggest-row" @mousedown.prevent="pickPathEndpoint('start', m)">
+              <span class="name" x-text="m.label"></span>
+            </div>
+          </template>
+        </div>
+      </div>
       <svg width="12" height="12" style="color:var(--text-muted)"><use href="#i-arrow"/></svg>
-      <span class="pill" x-text="pathEnd ? pathEnd.label : '点击终点'"></span>
+      <div class="pair-field">
+        <input class="pair-input" type="text"
+               x-model="pathEndInput"
+               @focus="pathEndFocused = true"
+               @blur="hidePairSuggest('end')"
+               @input="pathEndFocused = true"
+               @keydown.enter.prevent="resolvePathEndpoint('end')"
+               @keydown.escape="pathEndFocused = false"
+               placeholder="终点：输入名字或点图" />
+        <div class="pair-suggest" x-show="pathEndFocused && pairMatches(pathEndInput).length > 0" x-transition.opacity>
+          <template x-for="m in pairMatches(pathEndInput)" :key="m.id">
+            <div class="pair-suggest-row" @mousedown.prevent="pickPathEndpoint('end', m)">
+              <span class="name" x-text="m.label"></span>
+            </div>
+          </template>
+        </div>
+      </div>
       <button @click="exitTwoPerson()">退出</button>
     </div>
   </template>
@@ -748,7 +780,7 @@
         <div class="row"><span class="desc">· 鼠标悬停节点 → 邻居扩散</span></div>
         <div class="row"><span class="desc">· 点击节点 → 打开详情</span></div>
         <div class="row"><span class="desc">· 滚轮缩放，拖拽平移</span></div>
-        <div class="row"><span class="desc">· 双人路径：依次点击两点</span></div>
+        <div class="row"><span class="desc">· 双人路径：在顶栏输入两个名字（带补全），或在图上依次点两点</span></div>
         <div class="row"><span class="desc">· 引荐：自动扫描需求-能力匹配</span></div>
         <div class="modal-actions">
           <button class="btn primary" @click="showHelp = false">明白</button>
