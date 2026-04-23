@@ -157,6 +157,39 @@ DDL_STATEMENTS: tuple[str, ...] = (
         value TEXT
     )
     """,
+    # ----------------------------------------------------------------
+    # feedback：业务同事 WebUI 提交的 bug / 需求 ticket。
+    #   * ticket_id 形如 FB-YYYYMMDD-NNNN，对每个自然日独立自增
+    #   * payload_json 存渲染 md 时的完整输入（form + auto_capture +
+    #     db_snapshot + screenshots），md_path 指向落盘的 md 文件
+    #   * md 是 payload_json 的只读衍生物；SOT 始终是这张表
+    # ----------------------------------------------------------------
+    """
+    CREATE TABLE IF NOT EXISTS feedback (
+        id           INTEGER PRIMARY KEY AUTOINCREMENT,
+        ticket_id    TEXT NOT NULL UNIQUE,
+        type         TEXT NOT NULL CHECK(type IN ('bug','feature')),
+        status       TEXT NOT NULL DEFAULT 'open'
+                     CHECK(status IN ('open','in_progress','done','wontfix')),
+        title        TEXT NOT NULL,
+        submitter    TEXT NOT NULL,
+        severity     TEXT CHECK(severity IN ('blocking','daily','nice')),
+        payload_json TEXT NOT NULL,
+        md_path      TEXT,
+        created_at   TEXT NOT NULL DEFAULT (datetime('now')),
+        closed_at    TEXT,
+        closed_by    TEXT,
+        related_pr   TEXT
+    )
+    """,
+    """
+    CREATE INDEX IF NOT EXISTS ix_feedback_status
+        ON feedback(status, created_at DESC)
+    """,
+    """
+    CREATE INDEX IF NOT EXISTS ix_feedback_created
+        ON feedback(created_at DESC)
+    """,
 )
 
 
