@@ -29,8 +29,6 @@ dependencies = [
 viz = [
     "pyvis>=0.3.2",
 ]
-# Stage-2 cross-encoder reranker (BAAI/bge-reranker-v2-m3, ~560MB model + torch ~1GB).
-# 仅在 LODESTAR_RERANKER=bge 时按需安装，主链路保持纯 Python。
 rerank = [
     "FlagEmbedding>=1.3.0",
     "torch>=2.0.0",
