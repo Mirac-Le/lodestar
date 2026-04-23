@@ -34,37 +34,68 @@ export function withMount(path) {
   return MOUNT_PREFIX + path;
 }
 
+/* ---- API trace ring buffer ----
+ * 反馈表单打开时，从这里读取最近 10 次请求上下文，一并 POST
+ * 给 /api/feedback。保留整段 req_body + resp_body 让 AI 能精确
+ * 复现服务端返回了什么。size=10 是拍脑袋值，业务一次反馈通常只
+ * 关心最后几次操作，10 足够且不让 md 过长。 */
+const API_TRACE_MAX = 10;
+const __apiTrace = [];
+if (typeof window !== "undefined") {
+  window.__getApiTrace = () => __apiTrace.slice();
+}
+
 /** Thin fetch wrapper that:
  *   - prefixes `/api/...` with the current mount slug
  *   - attaches `X-Mount-Unlock` from window.app.unlockToken when present
  *   - on 401 + `mount_locked`, drops the cached token and reopens the
- *     unlock modal so the user can re-authenticate without a refresh. */
+ *     unlock modal so the user can re-authenticate without a refresh.
+ *   - records every call into an in-memory ring buffer for feedback
+ *     auto-capture (accessible via window.__getApiTrace()). */
 export async function api(path, opts = {}) {
-  const headers = { "Content-Type": "application/json", ...(opts.headers || {}) };
-  const tok = window.app && window.app.unlockToken;
-  if (tok) headers["X-Mount-Unlock"] = tok;
-  const res = await fetch(withMount(path), {
-    headers,
-    ...opts,
-    body: opts.body ? JSON.stringify(opts.body) : undefined,
-  });
-  if (!res.ok) {
+  const ts = new Date().toISOString();
+  const method = (opts.method || "GET").toUpperCase();
+  const reqBody = opts.body ?? null;
+  let status = 0;
+  let respBody = null;
+  try {
+    const headers = { "Content-Type": "application/json", ...(opts.headers || {}) };
+    const tok = window.app && window.app.unlockToken;
+    if (tok) headers["X-Mount-Unlock"] = tok;
+    const res = await fetch(withMount(path), {
+      headers,
+      ...opts,
+      body: opts.body ? JSON.stringify(opts.body) : undefined,
+    });
+    status = res.status;
     const text = await res.text();
-    if (res.status === 401) {
-      try {
-        const j = JSON.parse(text);
-        const d = j.detail;
-        const code = typeof d === "object" ? d.code : null;
-        if (code === "mount_locked") {
-          if (window.app) {
-            window.app.unlockToken = null;
-            window.app.locked = true;
-            window.app.openUnlockModal();
+    try { respBody = text ? JSON.parse(text) : null; }
+    catch { respBody = text ? text.slice(0, 500) : null; }
+    if (!res.ok) {
+      if (res.status === 401) {
+        try {
+          const j = typeof respBody === "object" && respBody !== null
+            ? respBody
+            : JSON.parse(text);
+          const d = j.detail;
+          const code = typeof d === "object" ? d.code : null;
+          if (code === "mount_locked") {
+            if (window.app) {
+              window.app.unlockToken = null;
+              window.app.locked = true;
+              window.app.openUnlockModal();
+            }
           }
-        }
-      } catch (_) { /* ignore */ }
+        } catch (_) { /* ignore */ }
+      }
+      throw new Error(`${res.status}: ${text}`);
     }
-    throw new Error(`${res.status}: ${text}`);
+    return respBody;
+  } finally {
+    __apiTrace.push({
+      ts, path, method,
+      req_body: reqBody, status, resp_body: respBody,
+    });
+    if (__apiTrace.length > API_TRACE_MAX) __apiTrace.shift();
   }
-  return res.json();
 }
