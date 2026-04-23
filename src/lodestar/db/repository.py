@@ -590,3 +590,54 @@ class Repository:
                 pid = int(row["pid"])
                 scores[pid] = scores.get(pid, 0) + 1
         return scores
+
+    # ------------------------------------------------------------------
+    # Feedback
+    # ------------------------------------------------------------------
+
+    def next_feedback_ticket_id(self, today: str | None = None) -> str:
+        """按自然日顺序生成下一个 ticket_id（格式 FB-YYYYMMDD-NNNN）。
+
+        today 默认 UTC 当天；测试里可以注入固定值。计数按每天独立，跨天
+        自然回 0001——不需要全局自增，业务按日对账更直观。
+        """
+        from datetime import datetime, timezone
+        if today is None:
+            today = datetime.now(timezone.utc).strftime("%Y%m%d")
+        prefix = f"FB-{today}-"
+        row = self.conn.execute(
+            "SELECT ticket_id FROM feedback"
+            " WHERE ticket_id LIKE ?"
+            " ORDER BY ticket_id DESC LIMIT 1",
+            (prefix + "%",),
+        ).fetchone()
+        seq = 1 if row is None else int(row["ticket_id"].rsplit("-", 1)[-1]) + 1
+        return f"{prefix}{seq:04d}"
+
+    def add_feedback(
+        self,
+        *,
+        ticket_id: str,
+        type_: str,
+        title: str,
+        submitter: str,
+        severity: str | None,
+        payload_json: str,
+        md_path: str | None,
+    ) -> int:
+        cur = self.conn.execute(
+            "INSERT INTO feedback"
+            " (ticket_id, type, title, submitter, severity,"
+            "  payload_json, md_path)"
+            " VALUES (?, ?, ?, ?, ?, ?, ?)",
+            (ticket_id, type_, title, submitter, severity,
+             payload_json, md_path),
+        )
+        self.conn.commit()
+        return int(cur.lastrowid or 0)
+
+    def get_feedback(self, ticket_id: str) -> dict | None:
+        row = self.conn.execute(
+            "SELECT * FROM feedback WHERE ticket_id = ?", (ticket_id,),
+        ).fetchone()
+        return dict(row) if row else None
