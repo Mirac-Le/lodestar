@@ -60,3 +60,6 @@ Thumbs.db
 
 # Cursor — local hook state / transcript index (no secrets, but machine-specific)
 .cursor/hooks/state/
+
+# Feedback tickets (contain PII; keep local)
+docs/feedback/

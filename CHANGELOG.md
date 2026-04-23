@@ -4,6 +4,19 @@
 
 ---
 
+## [2026-04-24]
+
+### Added
+- **WebUI 反馈系统**：topbar 新增「📝 反馈」按钮，业务同事可直接提交 Bug（必含截图 + 实际/期望）或需求（必用 When-Then 句式 + 验收 bullet）。提交时前端自动打包当前 `mount_slug` / `view_mode` / `query` / 高亮路径 / `directOverrides` 状态，外加最近 10 次 API 请求的完整 req+resp、最近 20 条前端错误、涉及联系人的 db 快照（Person + Me-edge + 1 跳邻居，跑过 PII 脱敏）。后端落 `feedback` 表 + 渲染 md 到 `docs/feedback/<slug>/FB-YYYYMMDD-NNNN.md`，md 开头带一段给 AI 的处理指引（尤其"bug/设计之争时先停下问开发"的 guardrail）。
+- **PII 脱敏工具**：新增 `lodestar.privacy.scrub`，手机号保留后 4、身份证 / 银行卡全 redact、邮箱 mask 中段。主要给 feedback snapshot 用，未来可推广到其他场景。
+
+### Changed
+- `docs/feedback/` 加入 `.gitignore`（默认不入库，反馈 md 内联联系人姓名 / 关系，当作本地 artifact 管理）。
+
+> 设计稿 & 实施计划：[`docs/plans/2026-04-23-feedback-system-design.md`](docs/plans/2026-04-23-feedback-system-design.md) / [`docs/plans/2026-04-23-feedback-system-plan.md`](docs/plans/2026-04-23-feedback-system-plan.md)
+
+---
+
 ## [2026-04-23]
 
 ### Added
