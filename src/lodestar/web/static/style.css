@@ -771,6 +771,190 @@ button { cursor: pointer; }
 }
 .bars .bar.on { background: var(--text-secondary); }
 
+/* 可信度可点击模式：把 .bar 当 button 用，鼠标悬停时把"我若设到这里"
+ * 的预览感拉出来，避免用户怀疑这条 bar 不能点。 */
+.bars-clickable .bar {
+  border: none;
+  padding: 0;
+  cursor: pointer;
+  transition: background 0.12s ease, transform 0.12s ease;
+}
+.bars-clickable .bar:hover { background: var(--text-muted); transform: scaleY(1.4); }
+.bars-clickable .bar.on:hover { background: var(--text); }
+.bars-clickable.busy .bar { cursor: progress; opacity: 0.6; }
+
+/* ============================================================
+ * Detail panel inline editors（联系人档案直改）
+ * ============================================================ */
+
+.detail-header-text { min-width: 0; flex: 1; }
+
+.editable-name {
+  cursor: pointer;
+  border-radius: 4px;
+  padding: 1px 4px;
+  margin: -1px -4px;
+  transition: background 0.12s ease;
+}
+.editable-name:hover { background: var(--bg-overlay); }
+.editable-name.is-me { cursor: default; }
+.editable-name.is-me:hover { background: transparent; }
+
+.name-edit { display: flex; gap: 6px; align-items: center; flex-wrap: wrap; }
+
+.inline-input {
+  background: var(--bg-overlay);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 4px 8px;
+  font: inherit;
+  color: var(--text);
+  outline: none;
+  min-width: 0;
+}
+.inline-input:focus {
+  border-color: var(--text-muted);
+  background: var(--bg-elevated, rgba(255,255,255,0.04));
+}
+.inline-input.name-input { font-size: 15px; font-weight: 590; flex: 1 1 140px; }
+
+.inline-btn {
+  background: transparent;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 4px 10px;
+  font-size: 12px;
+  color: var(--text-secondary);
+  cursor: pointer;
+  white-space: nowrap;
+  transition: background 0.12s ease, color 0.12s ease, border-color 0.12s ease;
+}
+.inline-btn:hover { background: var(--bg-overlay); color: var(--text); }
+.inline-btn:disabled { cursor: not-allowed; opacity: 0.5; }
+.inline-btn.primary {
+  color: var(--text);
+  border-color: var(--text-muted);
+}
+.inline-btn.primary:hover { background: var(--text-muted); color: var(--bg); }
+.inline-btn.ghost { border-color: transparent; color: var(--text-muted); }
+.inline-btn.ghost:hover { color: var(--text); background: var(--bg-overlay); }
+.inline-btn.danger:hover { color: var(--danger); border-color: var(--danger); }
+
+.label-btn {
+  background: transparent;
+  border: none;
+  color: var(--text-muted);
+  cursor: pointer;
+  font-size: 11px;
+  padding: 0 0 0 8px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: none;
+}
+.label-btn:hover { color: var(--text); }
+
+.detail-section .label {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+}
+
+/* bio KV 编辑器 */
+.bio-edit { display: flex; flex-direction: column; gap: 6px; }
+.bio-edit-row {
+  display: grid;
+  grid-template-columns: 96px 1fr auto;
+  gap: 6px;
+  align-items: center;
+}
+.bio-edit-row .bio-key { font-weight: 600; }
+.bio-edit-row .bio-val { width: 100%; }
+.bio-edit-row .inline-btn { padding: 2px 8px; font-size: 12px; }
+.inline-btn.add-row {
+  align-self: flex-start;
+  border-style: dashed;
+  color: var(--text-muted);
+  margin-top: 2px;
+}
+.bio-edit-actions {
+  display: flex;
+  gap: 6px;
+  margin-top: 6px;
+  padding-top: 8px;
+  border-top: 1px solid var(--border);
+}
+.bio-textarea {
+  width: 100%;
+  min-height: 90px;
+  resize: vertical;
+  font-family: inherit;
+  line-height: 1.55;
+}
+
+/* 标签 chips 编辑 */
+.tag-list {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px 0;
+}
+.tag-list.busy { opacity: 0.6; pointer-events: none; }
+
+.editable-tag {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding-right: 4px;
+}
+.tag-remove {
+  background: transparent;
+  border: none;
+  color: var(--text-muted);
+  cursor: pointer;
+  padding: 0 2px;
+  font-size: 11px;
+  line-height: 1;
+  border-radius: 2px;
+  opacity: 0;
+  transition: opacity 0.15s ease, color 0.15s ease;
+}
+.editable-tag:hover .tag-remove { opacity: 1; }
+.tag-remove:hover { color: var(--danger); background: rgba(255,255,255,0.05); }
+
+.tag-add {
+  background: transparent;
+  border: 1px dashed var(--border);
+  color: var(--text-muted);
+  cursor: pointer;
+  font-weight: 510;
+  padding: 2px 8px;
+  transition: border-color 0.12s ease, color 0.12s ease, background 0.12s ease;
+}
+.tag-add:hover {
+  border-color: var(--text-muted);
+  color: var(--text);
+  background: var(--bg-overlay);
+}
+.tag-add:disabled { cursor: not-allowed; opacity: 0.5; }
+
+.tag-add-editing {
+  background: var(--bg-overlay);
+  border: 1px dashed var(--text-muted);
+  padding: 0 4px;
+}
+.tag-add-input {
+  background: transparent;
+  border: none;
+  outline: none;
+  color: var(--text);
+  font: inherit;
+  font-size: 12px;
+  padding: 2px 4px;
+  width: 110px;
+}
+
+.value.muted { color: var(--text-muted); font-style: italic; }
+
 .related-row {
   display: flex; align-items: center; justify-content: space-between;
   padding: 7px 0; border-top: 1px solid var(--border);

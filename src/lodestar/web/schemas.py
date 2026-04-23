@@ -176,6 +176,7 @@ class CreatePersonRequest(BaseModel):
 
 
 class UpdatePersonRequest(BaseModel):
+    name: str | None = Field(default=None, min_length=1)
     bio: str | None = None
     notes: str | None = None
     tags: list[str] | None = None
@@ -245,6 +246,10 @@ class PersonDTO(BaseModel):
     color: str
     glow: str
     strength_to_me: int | None = None
+    # `relationship.id` of the Me↔此人 边（若存在）。
+    # 前端档案面板可信度直点保存需要它走 PATCH /api/relationships/{rid}，
+    # 没有这个字段就得再查一次 list_relationships。
+    me_edge_id: int | None = None
     tags: list[str] = []
     skills: list[str] = []
     companies: list[str] = []
@@ -253,14 +258,18 @@ class PersonDTO(BaseModel):
     related: list[dict] = []  # neighbors with strength
 
     @classmethod
-    def from_person(cls, p: Person, industry: str, color: str, glow: str,
-                    strength_to_me: int | None, related: list[dict]) -> PersonDTO:
+    def from_person(
+        cls, p: Person, industry: str, color: str, glow: str,
+        strength_to_me: int | None, related: list[dict],
+        me_edge_id: int | None = None,
+    ) -> PersonDTO:
         assert p.id is not None
         return cls(
             id=p.id, name=p.name, bio=p.bio, notes=p.notes, is_me=p.is_me,
             is_wishlist=p.is_wishlist,
             industry=industry, color=color, glow=glow,
             strength_to_me=strength_to_me,
+            me_edge_id=me_edge_id,
             tags=p.tags, skills=p.skills, companies=p.companies,
             cities=p.cities, needs=p.needs, related=related,
         )

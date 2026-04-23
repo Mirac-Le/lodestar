@@ -8,6 +8,7 @@
 
 ### Added
 - **多挂载落地页**：根 URL `/` 在配置了 2 个及以上 `--mount` 时不再加载 1.8k 行 SPA shell，改为渲染轻量 picker 页（标题 + 副标题 + hero 图，Alpine.js 拉 `/api/mounts` 列出所有网络）；单挂载继续 302 跳到唯一 mount。
+- **联系人档案直改**：右侧档案面板里的姓名 / 可信度 / 简介 / 标签全部支持 inline 编辑——点姓名变 input、点可信度某一档即时设到该值（限 1–5，不允许从 UI 把"已联系"打回 wishlist）、简介支持 KV 模式逐项改 + 添加 / 删除字段（适配 richard 模板 4 项与 tommy 表全部 9 项画像）、自由文本 bio 退化成 textarea；标签末尾加虚线框「＋ 标签」按钮，回车确认 / Esc 取消，鼠标悬停现有 chip 出 ✕ 移除。所有保存默认 `embed=false`，避免一次小改触发 embedding 调用；档案底部新增「刷新语义索引」按钮供用户改完一批字段后手动 reembed。后端 `UpdatePersonRequest` 新增 `name` 字段，`PersonDTO` 新增 `me_edge_id`（前端调可信度走 `PATCH /api/relationships/{rid}` 直接拿 rid，不再额外查一次 `list_relationships`）。
 
 ### Changed
 - **Excel 导入合并为单一 canonical preset**：`lodestar import` 删除 `--preset` 参数；所有 `.xlsx` 共用同一套规则。列名先做 NFKC + 去空白 + alias 归一化（如 `合作价值评分（0-5）` 自动等价于 `合作价值（0-5）`），再按 CORE / PROFILE_BIO / PROFILE_TAGS 三组白名单分发；不在白名单的列丢弃，import 末尾打印 `[import] 已忽略 N 个未识别列：...`。Tommy 表多出的 6 列金融画像（可投金额 / 风险偏好 / 共赢性 / 关系阶段 / 兴趣偏好）以「字段：值 · ...」拼到 `bio`，`核心标签` 进 `tags`。
@@ -15,6 +16,7 @@
 
 ### Fixed
 - **Tommy 网络曾"任意两人之间都没有关系"**：双 preset 时代 `tommy_contacts_preset` 漏配 `peers_column="认识"` + 列名拼错（`身份职位` vs 实际 `职务`），导致 `认识` 列被忽略 → 110 个联系人全部退化成「我」一颗星 → 前端 `hideMeEdgesAmbient` 把所有 me-edge 藏起来后看起来全空。统一 preset 后 tommy.db 重跑回归 110 Me 边 + 46 横向边。
+- **改名/改简介 UI 看似没变化**：`/static` 上线 inline edit 之后部分老用户浏览器复用了旧版 `state.js`（HTML 入口虽然带了 `?v=` cache-bust，但其内 `import "./modules/state.js"` 走的是相对 URL，浏览器不会再校验），表象是模板里的姓名 input/保存按钮存在但 `saveName` 行为缺失。修法：给 `/static` mount 加 `Cache-Control: no-cache, must-revalidate`（`_NoCacheStaticFiles`）。这不是"不缓存"，而是"每次必须带 ETag 回源校验"——文件没动就 304，开销可忽略；文件一改下次访问立即拿新版，不再需要逐 module 维护 `?v=`。
 
 ### Removed
 - ⚠️ BREAKING：删除 `richard_network_preset()` / `tommy_contacts_preset()` 公共导出与 CLI `--preset` 选项。外部脚本若 import 这两个名字需改为 `from lodestar.importers import default_preset`。按 AGENTS.md 数据模型一次到位原则，不保留过渡别名。

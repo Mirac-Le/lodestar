@@ -191,6 +191,113 @@ def test_create_and_delete(client: TestClient) -> None:
     assert client.get(f"{PFX}/api/people/{new_id}").status_code == 404
 
 
+# ---------------------------------------------------------------------
+# 联系人档案 inline 编辑：姓名 / bio KV / tags / 可信度
+# ---------------------------------------------------------------------
+
+
+def _alice_id(client: TestClient) -> int:
+    graph = client.get(f"{PFX}/api/graph").json()
+    return next(n["id"] for n in graph["nodes"] if n["label"] == "Alice")
+
+
+def test_person_dto_exposes_me_edge_id(client: TestClient) -> None:
+    """档案面板调可信度需要 me_edge_id；fixture 里 Me→Alice 有边、
+    Me→Bob 没直接边，DTO 必须正确区分。"""
+    graph = client.get(f"{PFX}/api/graph").json()
+    alice_id = next(n["id"] for n in graph["nodes"] if n["label"] == "Alice")
+    bob_id = next(n["id"] for n in graph["nodes"] if n["label"] == "Bob")
+    me_id = graph["me_id"]
+
+    alice = client.get(f"{PFX}/api/people/{alice_id}").json()
+    assert alice["me_edge_id"] is not None  # has Me edge
+    assert alice["strength_to_me"] == 4
+
+    bob = client.get(f"{PFX}/api/people/{bob_id}").json()
+    assert bob["me_edge_id"] is None  # no Me edge
+
+    me = client.get(f"{PFX}/api/people/{me_id}").json()
+    assert me["me_edge_id"] is None  # 自己永远没有"自己→自己"的边
+
+
+def test_update_person_rename(client: TestClient) -> None:
+    pid = _alice_id(client)
+    r = client.patch(
+        f"{PFX}/api/people/{pid}",
+        json={"name": "Alice 王", "embed": False},
+    )
+    assert r.status_code == 200
+    assert r.json()["name"] == "Alice 王"
+    # round-trip
+    assert client.get(f"{PFX}/api/people/{pid}").json()["name"] == "Alice 王"
+
+
+def test_update_person_rename_rejects_blank(client: TestClient) -> None:
+    pid = _alice_id(client)
+    r = client.patch(
+        f"{PFX}/api/people/{pid}",
+        json={"name": "   ", "embed": False},
+    )
+    # min_length=1 通过（"   " 长度 3），但 strip 后变空，由后端 422 拦截
+    assert r.status_code == 422
+
+
+def test_update_person_bio_kv_roundtrip(client: TestClient) -> None:
+    """前端把 KV 编辑器的草稿用 `bioFromPairs` 拼成 "k：v · k：v"
+    再 PATCH bio，后端只是当字符串存。验证存回去能再被 bioPairs 解析。"""
+    pid = _alice_id(client)
+    new_bio = "行业：私募基金 · 职务：基金经理 · 城市：上海 · 合作价值：4/5"
+    r = client.patch(
+        f"{PFX}/api/people/{pid}",
+        json={"bio": new_bio, "embed": False},
+    )
+    assert r.status_code == 200
+    assert r.json()["bio"] == new_bio
+
+
+def test_update_person_tags_add_and_remove(client: TestClient) -> None:
+    pid = _alice_id(client)
+    # Add a tag
+    r = client.patch(
+        f"{PFX}/api/people/{pid}",
+        json={"tags": ["私募基金", "新增标签"], "embed": False},
+    )
+    assert r.status_code == 200
+    assert set(r.json()["tags"]) == {"私募基金", "新增标签"}
+    # Remove all tags
+    r2 = client.patch(
+        f"{PFX}/api/people/{pid}",
+        json={"tags": [], "embed": False},
+    )
+    assert r2.status_code == 200
+    assert r2.json()["tags"] == []
+
+
+def test_update_relationship_strength_via_me_edge(client: TestClient) -> None:
+    """档案面板可信度直接走 PATCH /api/relationships/{me_edge_id}。"""
+    pid = _alice_id(client)
+    detail = client.get(f"{PFX}/api/people/{pid}").json()
+    rid = detail["me_edge_id"]
+    assert rid is not None
+
+    for v in (1, 5, 3):
+        r = client.patch(f"{PFX}/api/relationships/{rid}", json={"strength": v})
+        assert r.status_code == 200, r.text
+        assert r.json()["strength"] == v
+        # Person DTO should reflect the new strength_to_me
+        d2 = client.get(f"{PFX}/api/people/{pid}").json()
+        assert d2["strength_to_me"] == v
+
+
+def test_update_relationship_strength_rejects_zero(client: TestClient) -> None:
+    """RelationshipUpdateRequest 限定 strength ∈ [1, 5]，0 必须被 422。
+    这条门挡住前端 UI 误把"已联系"打回 wishlist。"""
+    pid = _alice_id(client)
+    rid = client.get(f"{PFX}/api/people/{pid}").json()["me_edge_id"]
+    r = client.patch(f"{PFX}/api/relationships/{rid}", json={"strength": 0})
+    assert r.status_code == 422
+
+
 def test_mounts_list_is_public(client: TestClient) -> None:
     """Root-level /api/mounts is the only endpoint the SPA can hit
     before unlocking — it must not require auth and must surface the

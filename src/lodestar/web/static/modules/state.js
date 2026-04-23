@@ -86,6 +86,28 @@ export function appState() {
       embed: true,
     },
 
+    /* ---- inline edit state for the detail panel ----
+     * 联系人档案的姓名 / 可信度 / 简介KV / 标签 都可在面板内直接改：
+     *   - editName / editBio / addingTag 控制各编辑器的开关；
+     *   - editBioPairs 是 bio KV 串解析出的可变草稿（[{key,value}]）；
+     *   - tagDraft / strengthBusy 给 chips/strength 用的瞬态状态。
+     * 所有保存走 PATCH /api/people/{pid} 或 PATCH /api/relationships/{rid}，
+     * 默认 embed=false（避免一次小改触发 embedding 调用），需要刷向量
+     * 走档案底部「刷新语义索引」按钮。 */
+    editName: false,
+    nameDraft: "",
+    nameSaving: false,
+    editBio: false,
+    editBioPairs: [],         // [{key:'行业', value:'私募基金'}, ...] 草稿
+    editBioFreeText: "",      // 当原 bio 不是 KV 串时退化成整段 textarea
+    editBioIsFreeText: false,
+    bioSaving: false,
+    addingTag: false,
+    tagDraft: "",
+    tagsSaving: false,
+    strengthBusy: false,
+    detailReembedBusy: false,
+
     /* ---- AI enrich state ---- */
     aiPreviewBusy: false,
     aiPreviewError: null,
@@ -603,6 +625,7 @@ export function appState() {
     async loadDetail(id) {
       try {
         this.detail = await api(`/api/people/${id}`);
+        this._resetDetailEdit();
         const cy = getCy();
         if (cy) {
           cy.animate({ center: { eles: cy.getElementById(String(id)) }, duration: 400 });
@@ -613,7 +636,19 @@ export function appState() {
     },
     clearDetail() {
       this.detail = null;
+      this._resetDetailEdit();
       if (!this.searchActive) this.enterAmbientMode();
+    },
+    /* 切人 / 关面板时把所有 inline 编辑器重置，防止草稿串台 */
+    _resetDetailEdit() {
+      this.editName = false;
+      this.nameDraft = "";
+      this.editBio = false;
+      this.editBioPairs = [];
+      this.editBioFreeText = "";
+      this.editBioIsFreeText = false;
+      this.addingTag = false;
+      this.tagDraft = "";
     },
     focusNode(id) { this.loadDetail(id); },
     nextStepText(pathResult) {
@@ -928,6 +963,243 @@ export function appState() {
         await this.loadGraph(); await this.loadStats();
       } catch (e) {
         this.notify(e.message, "error");
+      }
+    },
+
+    /* ============================================================
+     * Detail panel inline editors（联系人档案直接改）
+     *
+     * 设计要点：
+     *  - 所有保存默认 embed=false。bio/tags/name 改了不会立刻 reembed，
+     *    避免一次小改就打 OpenAI。需要刷向量走「刷新语义索引」按钮。
+     *  - 保存成功后调用 `_afterPersonPatched(updated)` 把面板与图谱节点
+     *    一并更新（label / size / tags / bio）；不重新拉整张 /api/graph。
+     *  - 可信度走 PATCH /api/relationships/{me_edge_id}，从 1–5 单调，
+     *    不允许 0（不允许从 UI 解除"已联系"，避免误删 Me 边）。
+     * ============================================================ */
+
+    /* 把 PATCH 回来的 PersonDTO 应用到 detail + 图谱节点 / 列表，
+     * 不需要重拉 /api/graph。strength 改动需要 reload 图谱（边粗细变了）。 */
+    _afterPersonPatched(updated) {
+      this.detail = updated;
+      const cy = getCy();
+      if (cy) {
+        const node = cy.getElementById(String(updated.id));
+        if (node && node.length) {
+          node.data("label", updated.name);
+          node.data("bio", updated.bio || "");
+          node.data("tags", updated.tags || []);
+          node.data("industry", updated.industry);
+          node.data("color", updated.color);
+          node.data("glow", updated.glow);
+        }
+      }
+      // 同步 graph.nodes 缓存里的字段，下次 reload/重渲染拿到一致状态
+      const gn = (this.graph?.nodes || []).find((n) => n.id === updated.id);
+      if (gn) {
+        gn.label = updated.name;
+        gn.bio = updated.bio;
+        gn.tags = updated.tags;
+        gn.industry = updated.industry;
+        gn.color = updated.color;
+        gn.glow = updated.glow;
+      }
+    },
+
+    /* ---- 姓名 ---- */
+    startEditName() {
+      if (!this.detail) return;
+      this.editName = true;
+      this.nameDraft = this.detail.name;
+    },
+    cancelEditName() {
+      this.editName = false;
+      this.nameDraft = "";
+    },
+    async saveName() {
+      if (!this.detail) return;
+      const name = (this.nameDraft || "").trim();
+      if (!name) {
+        this.notify("姓名不能为空", "error");
+        return;
+      }
+      if (name === this.detail.name) {
+        this.cancelEditName();
+        return;
+      }
+      this.nameSaving = true;
+      try {
+        const updated = await api(`/api/people/${this.detail.id}`, {
+          method: "PATCH",
+          body: { name, embed: false },
+        });
+        this._afterPersonPatched(updated);
+        this.editName = false;
+        this.notify("已更新姓名");
+      } catch (e) {
+        this.notify(`保存失败：${e.message}`, "error");
+      } finally {
+        this.nameSaving = false;
+      }
+    },
+
+    /* ---- 简介 KV / 自由文本 ---- */
+    startEditBio() {
+      if (!this.detail) return;
+      const pairs = this.bioPairs(this.detail.bio);
+      if (pairs) {
+        this.editBioIsFreeText = false;
+        // shallow-clone so cancel restores原值
+        this.editBioPairs = pairs.map((p) => ({ key: p.key, value: p.value }));
+        this.editBioFreeText = "";
+      } else {
+        this.editBioIsFreeText = true;
+        this.editBioPairs = [];
+        this.editBioFreeText = this.detail.bio || "";
+      }
+      this.editBio = true;
+    },
+    cancelEditBio() {
+      this.editBio = false;
+      this.editBioPairs = [];
+      this.editBioFreeText = "";
+      this.editBioIsFreeText = false;
+    },
+    addBioPair() {
+      this.editBioPairs.push({ key: "", value: "" });
+    },
+    removeBioPair(i) {
+      this.editBioPairs.splice(i, 1);
+    },
+    /* KV 列表 → "k：v · k：v" 字符串。空 key 或空 value 的行整行丢弃，
+     * 让用户用「删除」清空一项；中文表里全用全角冒号「：」与中点「·」。 */
+    bioFromPairs(pairs) {
+      const cleaned = (pairs || [])
+        .map((p) => ({
+          key: (p.key || "").trim(),
+          value: (p.value || "").trim(),
+        }))
+        .filter((p) => p.key && p.value);
+      return cleaned.map((p) => `${p.key}：${p.value}`).join(" · ");
+    },
+    async saveBio() {
+      if (!this.detail) return;
+      let nextBio;
+      if (this.editBioIsFreeText) {
+        nextBio = (this.editBioFreeText || "").trim();
+      } else {
+        nextBio = this.bioFromPairs(this.editBioPairs);
+      }
+      // 允许全清空 → 传空串（后端把 "" 当作清空 bio）
+      this.bioSaving = true;
+      try {
+        const updated = await api(`/api/people/${this.detail.id}`, {
+          method: "PATCH",
+          body: { bio: nextBio, embed: false },
+        });
+        this._afterPersonPatched(updated);
+        this.cancelEditBio();
+        this.notify("已更新简介");
+      } catch (e) {
+        this.notify(`保存失败：${e.message}`, "error");
+      } finally {
+        this.bioSaving = false;
+      }
+    },
+
+    /* ---- 标签 chips ---- */
+    startAddTag() {
+      this.addingTag = true;
+      this.tagDraft = "";
+      this.$nextTick?.(() => {
+        const el = document.querySelector(".tag-add-input");
+        if (el) el.focus();
+      });
+    },
+    cancelAddTag() {
+      this.addingTag = false;
+      this.tagDraft = "";
+    },
+    async commitNewTag() {
+      if (!this.detail) return;
+      const tag = (this.tagDraft || "").trim();
+      if (!tag) {
+        this.cancelAddTag();
+        return;
+      }
+      const tags = [...(this.detail.tags || [])];
+      if (tags.includes(tag)) {
+        this.notify(`标签「${tag}」已存在`, "info");
+        this.cancelAddTag();
+        return;
+      }
+      tags.push(tag);
+      await this._patchTags(tags);
+      this.cancelAddTag();
+    },
+    async removeTag(t) {
+      if (!this.detail) return;
+      const tags = (this.detail.tags || []).filter((x) => x !== t);
+      await this._patchTags(tags);
+    },
+    async _patchTags(tags) {
+      if (!this.detail) return;
+      this.tagsSaving = true;
+      try {
+        const updated = await api(`/api/people/${this.detail.id}`, {
+          method: "PATCH",
+          body: { tags, embed: false },
+        });
+        this._afterPersonPatched(updated);
+      } catch (e) {
+        this.notify(`保存失败：${e.message}`, "error");
+      } finally {
+        this.tagsSaving = false;
+      }
+    },
+
+    /* ---- 可信度 ---- */
+    async setStrength(value) {
+      if (!this.detail || this.detail.is_me) return;
+      const v = Math.max(1, Math.min(5, Number(value)));
+      if (this.detail.strength_to_me === v) return;
+      const rid = this.detail.me_edge_id;
+      if (!rid) {
+        this.notify("尚未与此人建立 Me 边，无法直接调可信度", "error");
+        return;
+      }
+      this.strengthBusy = true;
+      try {
+        await api(`/api/relationships/${rid}`, {
+          method: "PATCH",
+          body: { strength: v },
+        });
+        this.detail.strength_to_me = v;
+        // 边强度影响图谱粗细 / 视觉权重，需要重新拉一次 /api/graph
+        await this.loadGraph();
+        this.notify(`可信度已设为 ${v}/5`);
+      } catch (e) {
+        this.notify(`保存失败：${e.message}`, "error");
+      } finally {
+        this.strengthBusy = false;
+      }
+    },
+
+    /* ---- 手动刷新 embedding（替代每次保存都打 API）---- */
+    async reembedDetail() {
+      if (!this.detail || this.detail.is_me) return;
+      this.detailReembedBusy = true;
+      try {
+        const updated = await api(`/api/people/${this.detail.id}`, {
+          method: "PATCH",
+          body: { embed: true },  // body 其它字段都不传 = 不改字段，只重算向量
+        });
+        this._afterPersonPatched(updated);
+        this.notify("语义索引已刷新");
+      } catch (e) {
+        this.notify(`刷新失败：${e.message}`, "error");
+      } finally {
+        this.detailReembedBusy = false;
       }
     },
 

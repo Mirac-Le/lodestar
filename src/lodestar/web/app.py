@@ -115,6 +115,28 @@ STATIC_DIR = Path(__file__).parent / "static"
 _log = logging.getLogger(__name__)
 
 
+class _NoCacheStaticFiles(StaticFiles):
+    """`StaticFiles` 子类，把每个响应都标成 must-revalidate。
+
+    背景见 `create_app()` 里 `/static` 的 mount 注释。简言之：因为 SPA
+    没有打包步骤，更新就是直接覆盖 `static/`，浏览器对 ESM 模块的相对
+    `import` 缓存得太狠（一旦命中缓存就完全不再校验），导致 HTML 已经
+    用了新版本但 import 进来的 module 还是旧的，出现"模板里有按钮、
+    handler 找不到"的混合状态。
+
+    `no-cache` ≠ "不缓存"，而是 "每次都得带 If-None-Match 回源校验"；
+    Starlette 的 StaticFiles 默认就发 ETag/Last-Modified，文件没动就
+    304，开销比命中本地缓存多一次 conditional GET，可以接受。
+    """
+
+    async def get_response(self, path: str, scope: object) -> object:  # type: ignore[override]
+        resp = await super().get_response(path, scope)  # type: ignore[arg-type]
+        # Starlette Response 一定有 .headers，但 mypy/ty 看不出。
+        if hasattr(resp, "headers"):
+            resp.headers["Cache-Control"] = "no-cache, must-revalidate"
+        return resp
+
+
 # =====================================================================
 # Mount registry
 # =====================================================================
@@ -330,6 +352,8 @@ def _build_mount_app(spec: MountSpec) -> FastAPI:  # noqa: C901  (router-heavy)
         else:
             industry, color, glow = infer_industry(person)
 
+        me_id = me.id if me and me.id else None
+        me_edge_id: int | None = None
         related: list[dict] = []
         for r in rels:
             other_id = (
@@ -339,6 +363,8 @@ def _build_mount_app(spec: MountSpec) -> FastAPI:  # noqa: C901  (router-heavy)
             )
             if other_id is None:
                 continue
+            if me_id is not None and other_id == me_id and not person.is_me:
+                me_edge_id = r.id
             other = repo.get_person(other_id)
             if not other:
                 continue
@@ -354,6 +380,7 @@ def _build_mount_app(spec: MountSpec) -> FastAPI:  # noqa: C901  (router-heavy)
         return PersonDTO.from_person(
             person, industry, color, glow,
             s2me.get(pid), related,
+            me_edge_id=me_edge_id,
         )
 
     # ---------- SPA shell -------------------------------------------------
@@ -540,6 +567,11 @@ def _build_mount_app(spec: MountSpec) -> FastAPI:  # noqa: C901  (router-heavy)
         existing = repo.get_person(pid)
         if existing is None:
             raise HTTPException(404, "Not found")
+        if body.name is not None:
+            new_name = body.name.strip()
+            if not new_name:
+                raise HTTPException(422, "name 不能为空")
+            existing.name = new_name
         if body.bio is not None:
             existing.bio = body.bio
         if body.notes is not None:
@@ -1048,9 +1080,18 @@ def create_app() -> FastAPI:
         root.mount(f"/r/{spec.slug}", sub_app)
         _log.info("mounted /r/%s → %s", spec.slug, spec.db_path)
 
-    # Shared static assets (one copy in memory regardless of mount count)
+    # Shared static assets (one copy in memory regardless of mount count).
+    #
+    # 故意走 `Cache-Control: no-cache, must-revalidate`：
+    #   - SPA 没有 build step，更新就是直接覆盖 static/*.js / *.css。
+    #   - 浏览器对 ESM (`import "./modules/state.js"`) 的缓存极激进 —
+    #     入口 URL 即使带了 `?v=...`，里面的相对 import 一旦命中缓存就
+    #     不再校验，于是新 HTML+旧 module 混在一起，模板里有"编辑姓名"
+    #     而 saveName 找不到（参见 2026-04-23 的 inline edit 上线事故）。
+    #   - no-cache 不是"不缓存"，只是"每次必须回源校验"；StaticFiles
+    #     默认带 ETag/Last-Modified，文件未变就 304，开销可忽略。
     if STATIC_DIR.exists():
-        root.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
+        root.mount("/static", _NoCacheStaticFiles(directory=str(STATIC_DIR)), name="static")
 
     @root.get("/api/mounts", response_model=MountsResponse)
     def list_mounts() -> MountsResponse:

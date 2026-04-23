@@ -4,13 +4,19 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1">
   <title>Lodestar — Personal Network Navigator</title>
-  <link rel="stylesheet" href="/static/style.css?v=20260423-pair-suggest">
+  <link rel="stylesheet" href="/static/style.css?v=20260423-edit-profile-2">
   <script src="/static/cytoscape.min.js"></script>
   <script src="/static/echarts.min.js"></script>
   <!-- ESM 入口：必须先于 alpine.min.js 加载完成，否则 Alpine 解析
        `x-data="appState()"` 时拿不到工厂函数。defer + type=module 能
-       保证：先按文档顺序执行 module（含其 import 链），再执行 alpine。 -->
-  <script type="module" src="/static/app.js?v=20260423-focus-hover-1s"></script>
+       保证：先按文档顺序执行 module（含其 import 链），再执行 alpine。
+
+       注意：这里的 `?v=` 只能让浏览器拉新 `app.js`/`style.css` 入口；
+       app.js 里 `import "./modules/state.js"` 走的是相对 URL，浏览器
+       照样会复用缓存里的旧 module。所以真正抗缓存靠 server 端给
+       /static 加 `Cache-Control: no-cache`（见 web/app.py 的
+       _NoCacheStaticFiles），这里的 v 只是给老缓存用户兜个底。 -->
+  <script type="module" src="/static/app.js?v=20260423-edit-profile-2"></script>
   <script defer src="/static/alpine.min.js"></script>
 </head>
 <body x-data="appState()" x-init="init()" :class="searching ? 'searching' : ''">
@@ -428,13 +434,49 @@
         <div class="avatar"
              :style="`background:${detail.color}20; color:${detail.color}; border-color:${detail.color}40;`"
              x-text="detail.name.charAt(0)"></div>
-        <div>
-          <div class="name" x-text="detail.name"></div>
+        <div class="detail-header-text">
+          <!-- 姓名：只读态点击进入编辑，Enter 保存 / Esc 取消。
+               is_me 不允许改名（避免误把"我"重命名）。 -->
+          <template x-if="!editName">
+            <div class="name editable-name"
+                 :class="detail.is_me ? 'is-me' : ''"
+                 @click="!detail.is_me && startEditName()"
+                 :title="detail.is_me ? '' : '点击编辑姓名'"
+                 x-text="detail.name"></div>
+          </template>
+          <template x-if="editName">
+            <div class="name-edit">
+              <input type="text" class="inline-input name-input"
+                     x-model="nameDraft"
+                     :disabled="nameSaving"
+                     @keydown.enter.prevent="saveName()"
+                     @keydown.escape.prevent="cancelEditName()"
+                     x-init="$nextTick(() => $el.focus())">
+              <button class="inline-btn primary" @click="saveName()" :disabled="nameSaving">保存</button>
+              <button class="inline-btn ghost" @click="cancelEditName()" :disabled="nameSaving">取消</button>
+            </div>
+          </template>
           <div class="industry" x-text="detail.industry"></div>
         </div>
       </div>
 
-      <template x-if="detail.strength_to_me">
+      <!-- 可信度：1–5 拉杆，点击哪一档就保存到哪一档；只对非自己 + 已建 Me 边的人可用 -->
+      <template x-if="!detail.is_me && detail.me_edge_id">
+        <div class="detail-section">
+          <div class="label">可信度</div>
+          <div class="bars bars-clickable" :class="strengthBusy ? 'busy' : ''">
+            <template x-for="i in 5" :key="i">
+              <button type="button" class="bar"
+                      :class="i <= (detail.strength_to_me || 0) ? 'on' : ''"
+                      :disabled="strengthBusy"
+                      :title="`设为 ${i}/5`"
+                      @click="setStrength(i)"></button>
+            </template>
+          </div>
+        </div>
+      </template>
+      <!-- 自己 / 未联系（无 me_edge_id）的情况下退化为只读条 -->
+      <template x-if="(detail.is_me || !detail.me_edge_id) && detail.strength_to_me">
         <div class="detail-section">
           <div class="label">可信度</div>
           <div class="bars">
@@ -445,35 +487,99 @@
         </div>
       </template>
 
-      <template x-if="detail.bio">
-        <div class="detail-section">
-          <div class="label">简介</div>
-          <template x-if="bioPairs(detail.bio)">
-            <dl class="bio-kv">
-              <template x-for="(p, i) in bioPairs(detail.bio)" :key="i">
-                <div class="bio-kv-row">
-                  <dt x-text="p.key"></dt>
-                  <dd x-text="p.value"></dd>
-                </div>
-              </template>
-            </dl>
-          </template>
-          <template x-if="!bioPairs(detail.bio)">
-            <div class="value" x-text="detail.bio"></div>
+      <!-- 简介：只读 / 编辑两态 -->
+      <div class="detail-section">
+        <div class="label">
+          <span>简介</span>
+          <template x-if="!editBio">
+            <button class="label-btn" @click="startEditBio()" title="编辑简介">编辑</button>
           </template>
         </div>
-      </template>
 
-      <template x-if="detail.tags && detail.tags.length">
-        <div class="detail-section">
-          <div class="label">标签</div>
-          <div>
-            <template x-for="t in detail.tags" :key="t">
-              <span class="tag" x-text="t"></span>
+        <!-- 只读 -->
+        <template x-if="!editBio">
+          <template x-if="detail.bio">
+            <div>
+              <template x-if="bioPairs(detail.bio)">
+                <dl class="bio-kv">
+                  <template x-for="(p, i) in bioPairs(detail.bio)" :key="i">
+                    <div class="bio-kv-row">
+                      <dt x-text="p.key"></dt>
+                      <dd x-text="p.value"></dd>
+                    </div>
+                  </template>
+                </dl>
+              </template>
+              <template x-if="!bioPairs(detail.bio)">
+                <div class="value" x-text="detail.bio"></div>
+              </template>
+            </div>
+          </template>
+          <template x-if="!detail.bio">
+            <div class="value muted">（暂无简介，点「编辑」添加）</div>
+          </template>
+        </template>
+
+        <!-- 编辑：KV 模式 -->
+        <template x-if="editBio && !editBioIsFreeText">
+          <div class="bio-edit">
+            <template x-for="(p, i) in editBioPairs" :key="i">
+              <div class="bio-edit-row">
+                <input type="text" class="inline-input bio-key" x-model="p.key" placeholder="字段">
+                <input type="text" class="inline-input bio-val" x-model="p.value" placeholder="值">
+                <button class="inline-btn ghost danger" @click="removeBioPair(i)" title="删除此项">✕</button>
+              </div>
             </template>
+            <button class="inline-btn add-row" @click="addBioPair()">+ 添加字段</button>
+            <div class="bio-edit-actions">
+              <button class="inline-btn primary" @click="saveBio()" :disabled="bioSaving">
+                <span x-text="bioSaving ? '保存中…' : '保存简介'"></span>
+              </button>
+              <button class="inline-btn ghost" @click="cancelEditBio()" :disabled="bioSaving">取消</button>
+            </div>
           </div>
+        </template>
+
+        <!-- 编辑：自由文本退化模式（原 bio 不是 KV 串时） -->
+        <template x-if="editBio && editBioIsFreeText">
+          <div class="bio-edit">
+            <textarea class="inline-input bio-textarea" x-model="editBioFreeText"
+                      placeholder="一段话描述这个人"></textarea>
+            <div class="bio-edit-actions">
+              <button class="inline-btn primary" @click="saveBio()" :disabled="bioSaving">
+                <span x-text="bioSaving ? '保存中…' : '保存简介'"></span>
+              </button>
+              <button class="inline-btn ghost" @click="cancelEditBio()" :disabled="bioSaving">取消</button>
+            </div>
+          </div>
+        </template>
+      </div>
+
+      <!-- 标签：chip 列表 + 末尾虚线框「+ 标签」按钮 -->
+      <div class="detail-section">
+        <div class="label">标签</div>
+        <div class="tag-list" :class="tagsSaving ? 'busy' : ''">
+          <template x-for="t in (detail.tags || [])" :key="t">
+            <span class="tag editable-tag">
+              <span x-text="t"></span>
+              <button class="tag-remove" @click="removeTag(t)" :disabled="tagsSaving" title="移除">✕</button>
+            </span>
+          </template>
+          <template x-if="!addingTag">
+            <button class="tag tag-add" @click="startAddTag()" :disabled="tagsSaving" title="添加标签">＋ 标签</button>
+          </template>
+          <template x-if="addingTag">
+            <span class="tag tag-add-editing">
+              <input type="text" class="tag-add-input" x-model="tagDraft"
+                     placeholder="输入后回车"
+                     @keydown.enter.prevent="commitNewTag()"
+                     @keydown.escape.prevent="cancelAddTag()"
+                     @blur="commitNewTag()"
+                     :disabled="tagsSaving">
+            </span>
+          </template>
         </div>
-      </template>
+      </div>
 
       <template x-if="detail.skills && detail.skills.length">
         <div class="detail-section">
@@ -539,6 +645,12 @@
                   @click="aiReparseCurrent()"
                   title="用 AI 从此人的简介/备注里再抽一次结构化字段，合并进现有内容">
             <span x-text="aiPersonBusy === detail.id ? 'AI 解析中…' : 'AI 重新解析'"></span>
+          </button>
+          <button class="btn"
+                  :disabled="detailReembedBusy"
+                  @click="reembedDetail()"
+                  title="把当前简介 / 标签等字段重新跑一次向量索引，让语义检索能命中刚改的内容">
+            <span x-text="detailReembedBusy ? '索引中…' : '刷新语义索引'"></span>
           </button>
           <button class="btn danger" @click="deleteCurrent()">删除</button>
         </div>
