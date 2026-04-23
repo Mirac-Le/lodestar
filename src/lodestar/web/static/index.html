@@ -4,7 +4,7 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1">
   <title>Lodestar — Personal Network Navigator</title>
-  <link rel="stylesheet" href="/static/style.css?v=20260423-weak-direct-fallback">
+  <link rel="stylesheet" href="/static/style.css?v=20260424-feedback">
   <script src="/static/cytoscape.min.js"></script>
   <script src="/static/echarts.min.js"></script>
   <!-- ESM 入口：必须先于 alpine.min.js 加载完成，否则 Alpine 解析
@@ -16,7 +16,7 @@
        照样会复用缓存里的旧 module。所以真正抗缓存靠 server 端给
        /static 加 `Cache-Control: no-cache`（见 web/app.py 的
        _NoCacheStaticFiles），这里的 v 只是给老缓存用户兜个底。 -->
-  <script type="module" src="/static/app.js?v=20260423-weak-direct-fallback"></script>
+  <script type="module" src="/static/app.js?v=20260424-feedback"></script>
   <script defer src="/static/alpine.min.js"></script>
 </head>
 <body x-data="appState()" x-init="init()" :class="searching ? 'searching' : ''">
@@ -197,6 +197,10 @@
     <button class="btn" @click="openBatchEnrich()"
             title="对当前网络下所有联系人做 AI 解析（缺字段才跑）">
       <span style="font-weight: 600; letter-spacing: .02em;">AI 解析</span>
+    </button>
+    <button class="btn" @click="openFeedback()"
+            title="反馈 Bug 或提需求">
+      <span style="font-weight: 600; letter-spacing: .02em;">📝 反馈</span>
     </button>
     <button class="btn icon-only" @click="showHelp = true" title="快捷键 (?)">?</button>
   </div>
@@ -1282,6 +1286,134 @@
       <svg class="ico" width="13" height="13"><use href="#i-chart"/></svg>
       <span>数据</span>
     </button>
+  </template>
+
+  <!-- ========== Feedback modal ========== -->
+  <template x-if="showFeedback">
+    <div class="modal-bg" @click.self="closeFeedback()">
+      <div class="modal modal-feedback" @click.stop>
+        <h2>📝 反馈</h2>
+
+        <div class="form-row">
+          <label>
+            <input type="radio" value="bug" x-model="feedback.type">
+            🐛 报告 Bug
+          </label>
+          <label>
+            <input type="radio" value="feature" x-model="feedback.type">
+            💡 提需求
+          </label>
+        </div>
+
+        <label>标题（一句话概括，10–40 字）
+          <input type="text" x-model="feedback.title"
+                 maxlength="40" minlength="10"
+                 placeholder="示例：查『私募』时李四没出现">
+          <span class="hint" x-text="`${feedback.title.length}/40`"></span>
+        </label>
+
+        <label>涉及的人（从联系人里选，必选至少 1 人）
+          <input type="text" x-model="feedbackPersonQuery"
+                 placeholder="输入姓名关键词搜索">
+          <div class="pair-suggest" x-show="feedbackPersonQuery">
+            <template x-for="n in feedbackPersonMatches()" :key="n.id">
+              <div class="pair-item" @mousedown.prevent="addFeedbackPerson(n)">
+                <span x-text="n.label"></span>
+              </div>
+            </template>
+          </div>
+          <div class="tag-chips">
+            <template x-for="p in feedback.involvedPersons" :key="p.id">
+              <span class="tag-chip">
+                <span x-text="p.name"></span>
+                <button type="button" @click="removeFeedbackPerson(p.id)">✕</button>
+              </span>
+            </template>
+          </div>
+        </label>
+
+        <template x-if="feedback.type === 'bug'">
+          <div>
+            <label>你想干什么<input type="text" x-model="feedback.wantToDo"></label>
+            <label>你做了什么（一行一步）
+              <textarea x-model="feedback.did" rows="3"
+                        placeholder="1. 点了搜索框&#10;2. 输入关键词&#10;3. 按回车"></textarea>
+            </label>
+            <label>看到了什么（实际）<textarea x-model="feedback.actual" rows="2"></textarea></label>
+            <label>期望什么<textarea x-model="feedback.expected" rows="2"></textarea></label>
+            <label>为什么这样期望（可选）<textarea x-model="feedback.whyExpected" rows="2"></textarea></label>
+            <label>历史对比
+              <select x-model="feedback.history">
+                <option value="">请选</option>
+                <option value="new">🆕 新需求 / 第一次用</option>
+                <option value="recent">✅ 以前能用，最近才坏</option>
+                <option value="always">❌ 一直就是这样</option>
+              </select>
+            </label>
+          </div>
+        </template>
+
+        <template x-if="feedback.type === 'feature'">
+          <div>
+            <label>用户故事（必须用「当___的时候，我希望___」句式）
+              <textarea x-model="feedback.userStory" rows="3"
+                        placeholder="示例：当我在查『私募』但没有直接认识的人时，我希望系统能按城市再过一遍"></textarea>
+            </label>
+            <label>验收标准（每行一条 bullet，至少 1 条）
+              <textarea x-model="feedback.acceptance" rows="3"
+                        placeholder="- 城市下拉里有上海、北京&#10;- 选中后结果实时过滤"></textarea>
+            </label>
+            <label>现在怎么凑合（可选）
+              <textarea x-model="feedback.workaround" rows="2"></textarea>
+            </label>
+          </div>
+        </template>
+
+        <label>影响程度
+          <select x-model="feedback.severity">
+            <option value="">请选</option>
+            <option value="blocking">🔥 阻塞签单</option>
+            <option value="daily">⚠️ 每天都遇到</option>
+            <option value="nice">💭 有了更好</option>
+          </select>
+        </label>
+
+        <div class="form-row">
+          <label>你是谁<input type="text" x-model="feedback.submitterName" placeholder="姓名"></label>
+          <label>飞书 / 手机尾号<input type="text" x-model="feedback.submitterContact"></label>
+        </div>
+
+        <label>截图
+          <template x-if="feedback.type === 'bug'">
+            <span class="hint">Bug 必须至少 1 张</span>
+          </template>
+          <input type="file" accept="image/*" multiple
+                 @change="onFeedbackScreenshotPick($event.target.files); $event.target.value=''">
+          <div class="tag-chips">
+            <template x-for="(s, i) in feedback.screenshots" :key="i">
+              <span class="tag-chip">
+                <span x-text="s.filename"></span>
+                <button type="button" @click="removeFeedbackScreenshot(i)">✕</button>
+              </span>
+            </template>
+          </div>
+        </label>
+
+        <p class="hint">
+          ℹ️ 提交时会一并打包最近 10 次操作产生的技术数据，供开发定位问题。
+        </p>
+
+        <div class="modal-actions">
+          <button class="btn" @click="closeFeedback()">取消</button>
+          <button class="btn btn-primary"
+                  :disabled="!feedbackValid() || feedbackSubmitting"
+                  @click="submitFeedback()">
+            <span x-show="!feedbackSubmitting">提交</span>
+            <span x-show="feedbackSubmitting">提交中...</span>
+          </button>
+        </div>
+      </div>
+    </div>
   </template>
 
 </body>

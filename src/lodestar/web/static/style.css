@@ -1660,3 +1660,36 @@ a:hover {
 .rel-load-more {
   margin-top: 10px; width: 100%;
 }
+
+/* ---- Feedback modal ---- */
+.modal-feedback {
+  max-width: 560px;
+  width: 92vw;
+  max-height: 88vh;
+  overflow-y: auto;
+}
+
+.modal-feedback .form-row {
+  display: flex;
+  gap: 12px;
+}
+
+.modal-feedback label {
+  display: block;
+  margin-bottom: 12px;
+}
+
+.modal-feedback .hint {
+  color: var(--text-tertiary, #8a8f96);
+  font-size: 12px;
+  display: inline-block;
+  margin-left: 8px;
+}
+
+.modal-feedback .tag-chip button {
+  margin-left: 4px;
+  background: transparent;
+  border: none;
+  color: inherit;
+  cursor: pointer;
+}
