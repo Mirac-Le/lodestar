@@ -20,3 +20,25 @@
 import { appState } from "./modules/state.js";
 
 window.appState = appState;
+
+/* ---- Frontend error buffer ----
+ * 反馈表单提交时一并打包，帮 AI 定位"业务没看见但控制台红了"的错误。
+ * 20 条足够覆盖一次会话；大于此值环形丢弃最老的。 */
+const ERR_MAX = 20;
+window.__errBuffer = [];
+window.addEventListener("error", (e) => {
+  window.__errBuffer.push({
+    ts: new Date().toISOString(),
+    msg: e.message,
+    stack: e.error && e.error.stack ? e.error.stack : null,
+  });
+  if (window.__errBuffer.length > ERR_MAX) window.__errBuffer.shift();
+});
+window.addEventListener("unhandledrejection", (e) => {
+  window.__errBuffer.push({
+    ts: new Date().toISOString(),
+    reason: String(e.reason),
+    stack: e.reason && e.reason.stack ? e.reason.stack : null,
+  });
+  if (window.__errBuffer.length > ERR_MAX) window.__errBuffer.shift();
+});
