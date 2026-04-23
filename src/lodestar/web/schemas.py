@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
-from pydantic import BaseModel, Field
+from typing import Any
+
+from pydantic import BaseModel, Field, field_validator, model_validator
 
 from lodestar.models import Frequency, Person
 
@@ -366,3 +368,131 @@ class RelationshipListResponse(BaseModel):
     total: int
     offset: int
     limit: int
+
+
+# ---------------------------------------------------------------------
+# Feedback（业务反馈表单 + 自动捕获环境）
+# ---------------------------------------------------------------------
+# 表单校验故意收紧：业务如果连 When-Then 句式、验收 bullet 都填不出，
+# 说明需求没想清楚，这种反馈即使进库也会浪费一轮 AI 迭代。门槛挡住
+# 强于接纳后补。
+
+import re as _re
+
+_USER_STORY_RE = _re.compile(r"当.*的时候.*希望|when.*then", _re.I)
+_BULLET_RE = _re.compile(r"^\s*([-*]|\d+\.)\s+\S", _re.M)
+
+
+class FeedbackFormBug(BaseModel):
+    title: str = Field(min_length=10, max_length=40)
+    involved_person_ids: list[int] = Field(min_length=1)
+    want_to_do: str = Field(min_length=1)
+    did: str = Field(min_length=1)
+    actual: str = Field(min_length=1)
+    expected: str = Field(min_length=1)
+    why_expected: str | None = None
+    history: str = Field(pattern=r"^(new|recent|always)$")
+
+
+class FeedbackFormFeature(BaseModel):
+    title: str = Field(min_length=10, max_length=40)
+    involved_person_ids: list[int] = Field(min_length=1)
+    user_story: str
+    acceptance: list[str] = Field(min_length=1)
+    workaround: str | None = None
+
+    @field_validator("user_story")
+    @classmethod
+    def _user_story_must_when_then(cls, v: str) -> str:
+        if not _USER_STORY_RE.search(v):
+            raise ValueError("user_story 必须用「当___的时候，我希望___」句式")
+        return v
+
+    @field_validator("acceptance")
+    @classmethod
+    def _each_acceptance_is_bullet(cls, v: list[str]) -> list[str]:
+        joined = "\n".join(v)
+        if not _BULLET_RE.search(joined):
+            raise ValueError("acceptance 至少要有一条 `- ` 或 `1.` 起头的 bullet")
+        return v
+
+
+class FeedbackApiTraceEntry(BaseModel):
+    ts: str
+    method: str
+    path: str
+    req_body: Any | None = None
+    status: int | None = None
+    resp_body: Any | None = None
+
+
+class FeedbackErrorEntry(BaseModel):
+    ts: str
+    msg: str | None = None
+    stack: str | None = None
+    reason: str | None = None
+
+
+class FeedbackAutoCapture(BaseModel):
+    mount_slug: str
+    view_mode: str
+    search_active: bool
+    query: str | None = None
+    detail_person_id: int | None = None
+    active_path_key: str | None = None
+    direct_overrides: list[int] = []
+    indirect_targets: list[int] = []
+    contacted_targets: list[int] = []
+    api_trace: list[FeedbackApiTraceEntry] = []
+    error_buffer: list[FeedbackErrorEntry] = []
+    frontend_version: str
+    user_agent: str
+    viewport: str
+
+
+class FeedbackScreenshot(BaseModel):
+    filename: str
+    content_type: str = Field(pattern=r"^image/(png|jpeg|gif|webp)$")
+    data_base64: str
+
+
+class FeedbackSubmitRequest(BaseModel):
+    type: str = Field(pattern=r"^(bug|feature)$")
+    form: FeedbackFormBug | FeedbackFormFeature
+    submitter: str = Field(min_length=1)
+    severity: str = Field(pattern=r"^(blocking|daily|nice)$")
+    auto_capture: FeedbackAutoCapture
+    screenshots: list[FeedbackScreenshot] = []
+
+    @model_validator(mode="before")
+    @classmethod
+    def _dispatch_form_by_type(cls, data: Any) -> Any:
+        # 两个 form 类有不重叠的必填字段（bug 的 history / feature 的
+        # acceptance），Pydantic smart-union 在其中一侧字段不全时会歪
+        # 到另一侧并报无关的错。这里按外层 type 直接挑具体子类，让
+        # 下游 schema 校验报 message 和人类期望对齐。
+        if isinstance(data, dict):
+            t = data.get("type")
+            form = data.get("form")
+            if isinstance(form, dict):
+                if t == "bug":
+                    data = {**data, "form": FeedbackFormBug(**form)}
+                elif t == "feature":
+                    data = {**data, "form": FeedbackFormFeature(**form)}
+        return data
+
+    @model_validator(mode="after")
+    def _bug_needs_screenshot(self) -> FeedbackSubmitRequest:
+        if self.type == "bug" and not self.screenshots:
+            raise ValueError("Bug 类反馈必须至少附 1 张截图")
+        is_bug = isinstance(self.form, FeedbackFormBug)
+        if self.type == "bug" and not is_bug:
+            raise ValueError("type=bug 时 form 必须是 FeedbackFormBug")
+        if self.type == "feature" and is_bug:
+            raise ValueError("type=feature 时 form 必须是 FeedbackFormFeature")
+        return self
+
+
+class FeedbackSubmitResponse(BaseModel):
+    ticket_id: str
+    md_path: str
