@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re as _re
 from typing import Any
 
 from pydantic import BaseModel, Field, field_validator, model_validator
@@ -376,8 +377,6 @@ class RelationshipListResponse(BaseModel):
 # 表单校验故意收紧：业务如果连 When-Then 句式、验收 bullet 都填不出，
 # 说明需求没想清楚，这种反馈即使进库也会浪费一轮 AI 迭代。门槛挡住
 # 强于接纳后补。
-
-import re as _re
 
 _USER_STORY_RE = _re.compile(r"当.*的时候.*希望|when.*then", _re.I)
 _BULLET_RE = _re.compile(r"^\s*([-*]|\d+\.)\s+\S", _re.M)

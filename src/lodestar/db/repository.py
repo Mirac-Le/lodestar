@@ -601,9 +601,9 @@ class Repository:
         today 默认 UTC 当天；测试里可以注入固定值。计数按每天独立，跨天
         自然回 0001——不需要全局自增，业务按日对账更直观。
         """
-        from datetime import datetime, timezone
+        from datetime import UTC, datetime
         if today is None:
-            today = datetime.now(timezone.utc).strftime("%Y%m%d")
+            today = datetime.now(UTC).strftime("%Y%m%d")
         prefix = f"FB-{today}-"
         row = self.conn.execute(
             "SELECT ticket_id FROM feedback"

@@ -81,6 +81,8 @@ from lodestar.web.schemas import (
     EnrichJobStartRequest,
     EnrichJobState,
     EnrichPreviewRequest,
+    FeedbackSubmitRequest,
+    FeedbackSubmitResponse,
     GraphEdge,
     GraphNode,
     GraphPayload,
@@ -106,10 +108,6 @@ from lodestar.web.schemas import (
     UnlockRequest,
     UnlockResponse,
     UpdatePersonRequest,
-)
-from lodestar.web.schemas import (
-    FeedbackSubmitRequest,
-    FeedbackSubmitResponse,
 )
 from lodestar.web.schemas import (
     ProposedEdge as ProposedEdgeDTO,
@@ -1078,12 +1076,12 @@ def _build_mount_app(spec: MountSpec) -> FastAPI:  # noqa: C901  (router-heavy)
         repo: Repository = Depends(verified),
     ) -> FeedbackSubmitResponse:
         import base64
-        from datetime import datetime, timezone
+        from datetime import UTC, datetime
 
         from lodestar.web.feedback_markdown import render_ticket_md
         from lodestar.web.feedback_snapshot import build_snapshot
 
-        today = datetime.now(timezone.utc).strftime("%Y%m%d")
+        today = datetime.now(UTC).strftime("%Y%m%d")
         ticket_id = repo.next_feedback_ticket_id(today=today)
 
         snapshot = build_snapshot(repo, body.form.involved_person_ids)
@@ -1103,7 +1101,7 @@ def _build_mount_app(spec: MountSpec) -> FastAPI:  # noqa: C901  (router-heavy)
             )
             saved_screenshots.append({"filename": fname})
 
-        created_at = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
+        created_at = datetime.now(UTC).strftime("%Y-%m-%d %H:%M:%S")
         md_payload = {
             "ticket_id": ticket_id,
             "type": body.type,

@@ -67,10 +67,7 @@ def render_ticket_md(payload: dict[str, Any]) -> str:
         kind=("bug" if type_ == "bug" else "需求"),
     ) + "\n---\n\n"
 
-    if type_ == "bug":
-        body = _render_bug_body(form)
-    else:
-        body = _render_feature_body(form)
+    body = _render_bug_body(form) if type_ == "bug" else _render_feature_body(form)
 
     involved = _render_involved(snapshot)
 
