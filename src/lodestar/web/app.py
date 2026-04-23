@@ -108,6 +108,10 @@ from lodestar.web.schemas import (
     UpdatePersonRequest,
 )
 from lodestar.web.schemas import (
+    FeedbackSubmitRequest,
+    FeedbackSubmitResponse,
+)
+from lodestar.web.schemas import (
     ProposedEdge as ProposedEdgeDTO,
 )
 
@@ -1061,6 +1065,76 @@ def _build_mount_app(spec: MountSpec) -> FastAPI:  # noqa: C901  (router-heavy)
             by_strength=dict(sorted(strength_counter.items())),
             top_companies=company_counter.most_common(8),
             top_cities=city_counter.most_common(8),
+        )
+
+    # ---------- feedback --------------------------------------------------
+    # 业务 WebUI 反馈入口。表单 + 自动捕获的 payload 一次性 POST 进来，
+    # 服务端生成 ticket_id，反查 db snapshot，落 feedback 行，渲染 md。
+    # LODESTAR_FEEDBACK_DIR 环境变量控制输出根目录，默认 `docs/feedback/`
+    # 相对于 CWD；测试里会 monkey-patch 成 tmp_path。
+    @sub.post("/api/feedback", response_model=FeedbackSubmitResponse)
+    def submit_feedback(
+        body: FeedbackSubmitRequest,
+        repo: Repository = Depends(verified),
+    ) -> FeedbackSubmitResponse:
+        import base64
+        from datetime import datetime, timezone
+
+        from lodestar.web.feedback_markdown import render_ticket_md
+        from lodestar.web.feedback_snapshot import build_snapshot
+
+        today = datetime.now(timezone.utc).strftime("%Y%m%d")
+        ticket_id = repo.next_feedback_ticket_id(today=today)
+
+        snapshot = build_snapshot(repo, body.form.involved_person_ids)
+
+        out_dir = Path(
+            os.environ.get("LODESTAR_FEEDBACK_DIR", "docs/feedback")
+        ) / slug
+        attachments_dir = out_dir / "attachments"
+        out_dir.mkdir(parents=True, exist_ok=True)
+        attachments_dir.mkdir(exist_ok=True)
+        saved_screenshots: list[dict] = []
+        for i, s in enumerate(body.screenshots, start=1):
+            ext = s.content_type.split("/")[-1]
+            fname = f"{ticket_id}-{i:02d}.{ext}"
+            (attachments_dir / fname).write_bytes(
+                base64.b64decode(s.data_base64)
+            )
+            saved_screenshots.append({"filename": fname})
+
+        created_at = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
+        md_payload = {
+            "ticket_id": ticket_id,
+            "type": body.type,
+            "status": "open",
+            "severity": body.severity,
+            "submitter": body.submitter,
+            "created_at": created_at,
+            "form": body.form.model_dump(),
+            "auto_capture": body.auto_capture.model_dump(),
+            "db_snapshot": snapshot,
+            "screenshots": saved_screenshots,
+        }
+        md_text = render_ticket_md(md_payload)
+        md_path = out_dir / f"{ticket_id}.md"
+        md_path.write_text(md_text, encoding="utf-8")
+
+        repo.add_feedback(
+            ticket_id=ticket_id,
+            type_=body.type,
+            title=body.form.title,
+            submitter=body.submitter,
+            severity=body.severity,
+            payload_json=json.dumps(
+                md_payload, ensure_ascii=False, default=str,
+            ),
+            md_path=str(md_path),
+        )
+
+        return FeedbackSubmitResponse(
+            ticket_id=ticket_id,
+            md_path=str(md_path),
         )
 
     return sub
