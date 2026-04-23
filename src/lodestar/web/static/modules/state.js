@@ -166,6 +166,24 @@ export function appState() {
 
     industriesList: INDUSTRIES,
 
+    /* ---- Feedback form state ----
+     * 业务 WebUI「📝 反馈」modal 的所有状态。门槛故意高：
+     * 字段校验不过就提交按钮置灰，宁可让业务放弃也不收残废反馈。 */
+    showFeedback: false,
+    feedbackSubmitting: false,
+    feedback: {
+      type: "bug",
+      title: "",
+      involvedPersons: [],
+      wantToDo: "", did: "", actual: "", expected: "", whyExpected: "",
+      history: "",
+      userStory: "", acceptance: "", workaround: "",
+      severity: "",
+      submitterName: "", submitterContact: "",
+      screenshots: [],
+    },
+    feedbackPersonQuery: "",
+
     init() {
       window.app = this;
       this.newPerson = this.emptyPerson();
@@ -1764,6 +1782,138 @@ export function appState() {
     notify(msg, type = "info", durationMs = 2800) {
       this.toast = { msg, type };
       setTimeout(() => { if (this.toast && this.toast.msg === msg) this.toast = null; }, durationMs);
+    },
+
+    /* -------- feedback -------- */
+    openFeedback() {
+      this.feedback = {
+        type: "bug", title: "", involvedPersons: [],
+        wantToDo: "", did: "", actual: "", expected: "", whyExpected: "",
+        history: "",
+        userStory: "", acceptance: "", workaround: "",
+        severity: "", submitterName: "", submitterContact: "",
+        screenshots: [],
+      };
+      this.feedbackPersonQuery = "";
+      this.showFeedback = true;
+    },
+    closeFeedback() { this.showFeedback = false; },
+
+    feedbackPersonMatches() {
+      const q = (this.feedbackPersonQuery || "").toLowerCase().trim();
+      const nodes = (this.graph?.nodes || [])
+        .filter(n => !n.is_me)
+        .filter(n => !this.feedback.involvedPersons.some(p => p.id === n.id));
+      if (!q) return nodes.slice(0, 20);
+      return nodes.filter(n => (n.label || "").toLowerCase().includes(q)).slice(0, 20);
+    },
+
+    addFeedbackPerson(node) {
+      this.feedback.involvedPersons.push({ id: node.id, name: node.label });
+      this.feedbackPersonQuery = "";
+    },
+
+    removeFeedbackPerson(pid) {
+      this.feedback.involvedPersons =
+        this.feedback.involvedPersons.filter(p => p.id !== pid);
+    },
+
+    async onFeedbackScreenshotPick(fileList) {
+      const files = Array.from(fileList || []).slice(0, 3);
+      for (const f of files) {
+        if (f.size > 5 * 1024 * 1024) {
+          this.notify(`${f.name} 超过 5MB，已跳过`, "error");
+          continue;
+        }
+        const b64 = await new Promise((resolve, reject) => {
+          const r = new FileReader();
+          r.onload = () => resolve(String(r.result).split(",")[1] || "");
+          r.onerror = reject;
+          r.readAsDataURL(f);
+        });
+        this.feedback.screenshots.push({
+          filename: f.name,
+          content_type: f.type || "image/png",
+          data_base64: b64,
+        });
+      }
+    },
+
+    removeFeedbackScreenshot(i) {
+      this.feedback.screenshots.splice(i, 1);
+    },
+
+    feedbackValid() {
+      const f = this.feedback;
+      if (f.title.length < 10 || f.title.length > 40) return false;
+      if (f.involvedPersons.length === 0) return false;
+      if (!f.severity) return false;
+      if (!f.submitterName.trim() || !f.submitterContact.trim()) return false;
+      if (f.type === "bug") {
+        if (f.screenshots.length === 0) return false;
+        if (!f.wantToDo || !f.did || !f.actual || !f.expected) return false;
+        if (!f.history) return false;
+        return true;
+      } else {
+        if (!/当.*的时候.*希望|when.*then/i.test(f.userStory)) return false;
+        const bullets = f.acceptance.split("\n").filter(l => /^\s*([-*]|\d+\.)\s+\S/.test(l));
+        if (bullets.length === 0) return false;
+        return true;
+      }
+    },
+
+    async submitFeedback() {
+      if (!this.feedbackValid() || this.feedbackSubmitting) return;
+      this.feedbackSubmitting = true;
+      const f = this.feedback;
+      const form = f.type === "bug" ? {
+        title: f.title,
+        involved_person_ids: f.involvedPersons.map(p => p.id),
+        want_to_do: f.wantToDo, did: f.did,
+        actual: f.actual, expected: f.expected,
+        why_expected: f.whyExpected || null,
+        history: f.history,
+      } : {
+        title: f.title,
+        involved_person_ids: f.involvedPersons.map(p => p.id),
+        user_story: f.userStory,
+        acceptance: f.acceptance.split("\n").filter(l => l.trim()),
+        workaround: f.workaround || null,
+      };
+      try {
+        const body = {
+          type: f.type,
+          form,
+          submitter: `${f.submitterName}（${f.submitterContact}）`,
+          severity: f.severity,
+          auto_capture: {
+            mount_slug: this.mountSlug,
+            view_mode: this.viewMode,
+            search_active: this.searchActive,
+            query: this.query || null,
+            detail_person_id: this.detail?.id || null,
+            active_path_key: this.activePathKey,
+            direct_overrides: Object.keys(this.directOverrides || {}).map(Number),
+            indirect_targets: (this.indirect || []).map(r => r.target_id),
+            contacted_targets: (this.contacted || []).map(r => r.target_id),
+            api_trace: (window.__getApiTrace?.() || []),
+            error_buffer: (window.__errBuffer || []).slice(),
+            frontend_version: document.querySelector(
+              'script[type="module"][src*="app.js"]'
+            )?.src.split("?v=")[1] || "unknown",
+            user_agent: navigator.userAgent,
+            viewport: `${window.innerWidth}x${window.innerHeight}`,
+          },
+          screenshots: f.screenshots,
+        };
+        const resp = await api("/api/feedback", { method: "POST", body });
+        this.notify(`已提交 ${resp.ticket_id}，请发给技术同事`, "info", 6000);
+        this.closeFeedback();
+      } catch (e) {
+        this.notify(`提交失败：${e.message}`, "error", 5000);
+      } finally {
+        this.feedbackSubmitting = false;
+      }
     },
   };
 }
