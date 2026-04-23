@@ -149,3 +149,43 @@ def test_ticket_id_increments_same_day(
     r2 = client.post(f"{PFX}/api/feedback", json=_valid_bug_body(alice_id))
     assert r1.json()["ticket_id"] != r2.json()["ticket_id"]
     assert r2.json()["ticket_id"].endswith("-0002")
+
+
+def test_submit_feature_end_to_end(
+    client_with_data: tuple[TestClient, int, Path],
+) -> None:
+    client, alice_id, feedback_dir = client_with_data
+    body = {
+        "type": "feature",
+        "form": {
+            "title": "按城市筛选联系人列表这里",
+            "involved_person_ids": [alice_id],
+            "user_story": "当我搜索没结果的时候，我希望能按城市再过滤一遍",
+            "acceptance": [
+                "- 城市下拉里有上海、北京",
+                "- 选中后列表实时过滤",
+            ],
+            "workaround": "现在只能手动翻",
+        },
+        "submitter": "王磊",
+        "severity": "nice",
+        "auto_capture": {
+            "mount_slug": "me", "view_mode": "ambient",
+            "search_active": False, "query": None,
+            "detail_person_id": None, "active_path_key": None,
+            "direct_overrides": [], "indirect_targets": [],
+            "contacted_targets": [], "api_trace": [],
+            "error_buffer": [],
+            "frontend_version": "20260424-feedback",
+            "user_agent": "Mozilla/5.0", "viewport": "1920x1080",
+        },
+        "screenshots": [],
+    }
+    r = client.post(f"{PFX}/api/feedback", json=body)
+    assert r.status_code == 200, r.text
+    ticket = r.json()["ticket_id"]
+    md = (feedback_dir / "me" / f"{ticket}.md").read_text(encoding="utf-8")
+    assert "用户故事" in md
+    assert "当我搜索没结果的时候" in md
+    assert "验收标准" in md
+    assert "城市下拉" in md
