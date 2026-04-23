@@ -545,6 +545,39 @@ button { cursor: pointer; }
   line-height: 1.55;
 }
 
+/* ---- weak-direct fallback hint ----
+ * Indirect 卡片底部的灰色一行：解释为什么算法走了引荐 + 链接式按钮
+ * 让用户改用直连。视觉刻意压低权重，不与主路径竞争注意力。 */
+.direct-fallback-hint {
+  margin-top: 8px;
+  padding: 6px 8px;
+  border-top: 1px dashed rgba(255, 255, 255, 0.06);
+  color: var(--text-tertiary, #8a8f96);
+  font-size: 12.5px;
+  line-height: 1.5;
+}
+
+.direct-fallback-hint b {
+  color: var(--text-secondary);
+  font-weight: 510;
+}
+
+.direct-fallback-hint .link-btn {
+  margin-left: 6px;
+  padding: 0;
+  background: none;
+  border: none;
+  color: var(--accent, #7aa6ff);
+  font: inherit;
+  cursor: pointer;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+
+.direct-fallback-hint .link-btn:hover {
+  color: var(--accent-hover, #9ab8ff);
+}
+
 /* ---- bucketed path sections (target / direct / weak) ---- */
 .path-section {
   margin-top: 14px;

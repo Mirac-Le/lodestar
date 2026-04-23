@@ -9,6 +9,7 @@
 ### Added
 - **多挂载落地页**：根 URL `/` 在配置了 2 个及以上 `--mount` 时不再加载 1.8k 行 SPA shell，改为渲染轻量 picker 页（标题 + 副标题 + hero 图，Alpine.js 拉 `/api/mounts` 列出所有网络）；单挂载继续 302 跳到唯一 mount。
 - **联系人档案直改**：右侧档案面板里的姓名 / 可信度 / 简介 / 标签全部支持 inline 编辑——点姓名变 input、点可信度某一档即时设到该值（限 1–5，不允许从 UI 把"已联系"打回 wishlist）、简介支持 KV 模式逐项改 + 添加 / 删除字段（适配 richard 模板 4 项与 tommy 表全部 9 项画像）、自由文本 bio 退化成 textarea；标签末尾加虚线框「＋ 标签」按钮，回车确认 / Esc 取消，鼠标悬停现有 chip 出 ✕ 移除。所有保存默认 `embed=false`，避免一次小改触发 embedding 调用；档案底部新增「刷新语义索引」按钮供用户改完一批字段后手动 reembed。后端 `UpdatePersonRequest` 新增 `name` 字段，`PersonDTO` 新增 `me_edge_id`（前端调可信度走 `PATCH /api/relationships/{rid}` 直接拿 rid，不再额外查一次 `list_relationships`）。
+- **弱直连 fallback 提示**：当某 indirect 卡片对应的目标其实和"我"也有 1 跳直接边（只是 strength<`weak_me_floor` 被算法惩罚到走了引荐），卡片底部新增一条灰色提示，明示直连强度（如 "你也直接认识他（强度 3/5）"）并附「改用直连」按钮；点击就地把该行的 path / node_ids / edge_ids 替换成"我 → 目标"合成直连，同时图谱高亮跟着切换。再点「改回引荐链」无损还原，target_id 不变，列表 DOM 顺序稳定。后端 `PathResultDTO` 新增 `direct_me_strength: int | None`，仅 indirect 桶填充；contacted / wishlist 与 two-person path 不受影响。算法本身（`weak_me_floor=4`、Me-边惩罚）保持不变——既保留"先推熟人引荐"的默认值判断，也让用户随时能一眼看到并覆盖。
 
 ### Changed
 - **Excel 导入合并为单一 canonical preset**：`lodestar import` 删除 `--preset` 参数；所有 `.xlsx` 共用同一套规则。列名先做 NFKC + 去空白 + alias 归一化（如 `合作价值评分（0-5）` 自动等价于 `合作价值（0-5）`），再按 CORE / PROFILE_BIO / PROFILE_TAGS 三组白名单分发；不在白名单的列丢弃，import 末尾打印 `[import] 已忽略 N 个未识别列：...`。Tommy 表多出的 6 列金融画像（可投金额 / 风险偏好 / 共赢性 / 关系阶段 / 兴趣偏好）以「字段：值 · ...」拼到 `bio`，`核心标签` 进 `tags`。

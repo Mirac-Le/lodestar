@@ -146,6 +146,73 @@ def test_wishlist_flag_is_decoupled_from_path_kind(
     assert any(p["target_name"] == "Star" for p in data["wishlist"])
 
 
+def test_indirect_carries_direct_me_strength_when_weak_direct_exists(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """When the algorithm picks an indirect path for a target that I also
+    know directly (just via a weak edge that got penalised by
+    ``weak_me_floor``), the response must expose that weak strength on the
+    indirect row so the UI can offer a "use direct instead" fallback.
+    Contacted-bucket rows must NOT carry the field — it's reserved for
+    indirect, where it actually means something to surface.
+
+    Topology:
+        Me --5-- Alice --5-- Bob
+        Me --3-- Bob   (weak; weak_me_floor=4 by default → penalised)
+
+    Expected: Bob falls into indirect with direct_me_strength=3;
+              Alice (1-hop, strength 5) lands in contacted with
+              direct_me_strength=None.
+    """
+    db = tmp_path / "weakdirect.db"
+    _bootstrap_mount(db, monkeypatch)
+
+    conn = connect(db)
+    init_schema(conn, embedding_dim=8)
+    repo = Repository(conn)
+    me = repo.ensure_me("我")
+    alice = repo.add_person(Person(name="Alice", bio="量化研究员", tags=["私募"]))
+    bob = repo.add_person(Person(name="Bob", bio="销售总监", tags=["私募", "销售"]))
+    assert me.id and alice.id and bob.id
+    repo.add_relationship(Relationship(
+        source_id=me.id, target_id=alice.id, strength=5,
+        frequency=Frequency.MONTHLY,
+    ))
+    repo.add_relationship(Relationship(
+        source_id=alice.id, target_id=bob.id, strength=5,
+        frequency=Frequency.MONTHLY,
+    ))
+    repo.add_relationship(Relationship(
+        source_id=me.id, target_id=bob.id, strength=3,
+        frequency=Frequency.YEARLY,
+    ))
+    conn.close()
+
+    client = TestClient(create_app())
+    r = client.post(f"{PFX}/api/search", json={"goal": "私募", "no_llm": True})
+    assert r.status_code == 200
+    data = r.json()
+
+    bob_indirect = next(
+        (p for p in data["indirect"] if p["target_name"] == "Bob"), None,
+    )
+    assert bob_indirect is not None, (
+        "Bob should be in indirect bucket because weak_me_floor=4 penalises "
+        "the strength=3 direct edge"
+    )
+    assert bob_indirect["path_kind"] == "indirect"
+    assert bob_indirect["direct_me_strength"] == 3, (
+        "indirect rows that ALSO have a weak direct me-edge must surface that "
+        "edge's strength so the UI can render the 'use direct' fallback"
+    )
+
+    for row in data["contacted"]:
+        assert row.get("direct_me_strength") is None, (
+            f"contacted rows must not carry direct_me_strength "
+            f"(target={row['target_name']}, value={row.get('direct_me_strength')})"
+        )
+
+
 def test_two_person_path(client: TestClient) -> None:
     graph = client.get(f"{PFX}/api/graph").json()
     me_id = graph["me_id"]

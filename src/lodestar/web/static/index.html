@@ -4,7 +4,7 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1">
   <title>Lodestar — Personal Network Navigator</title>
-  <link rel="stylesheet" href="/static/style.css?v=20260423-edit-profile-2">
+  <link rel="stylesheet" href="/static/style.css?v=20260423-weak-direct-fallback">
   <script src="/static/cytoscape.min.js"></script>
   <script src="/static/echarts.min.js"></script>
   <!-- ESM 入口：必须先于 alpine.min.js 加载完成，否则 Alpine 解析
@@ -16,7 +16,7 @@
        照样会复用缓存里的旧 module。所以真正抗缓存靠 server 端给
        /static 加 `Cache-Control: no-cache`（见 web/app.py 的
        _NoCacheStaticFiles），这里的 v 只是给老缓存用户兜个底。 -->
-  <script type="module" src="/static/app.js?v=20260423-edit-profile-2"></script>
+  <script type="module" src="/static/app.js?v=20260423-weak-direct-fallback"></script>
   <script defer src="/static/alpine.min.js"></script>
 </head>
 <body x-data="appState()" x-init="init()" :class="searching ? 'searching' : ''">
@@ -344,6 +344,31 @@
                 <div class="path-context"
                      x-text="pathContextLine(p)"></div>
                 <div class="path-next" x-text="nextStepText(p)"></div>
+                <!-- weak-direct fallback：算法因可信度<weak_me_floor 把这条
+                     直连压成 indirect，但用户其实认识此人。把直连强度暴露
+                     出来 + 一个一键切换按钮，决定权交还用户。 -->
+                <template x-if="p.direct_me_strength">
+                  <div class="direct-fallback-hint" @click.stop>
+                    <template x-if="!isUsingDirect(p)">
+                      <span>
+                        你也直接认识 <b x-text="p.target_name"></b>（强度
+                        <span x-text="p.direct_me_strength"></span>/5），
+                        系统因为关系偏弱推荐了引荐链。
+                        <button type="button"
+                                class="link-btn"
+                                @click="useDirectInsteadOfIntro(p)">改用直连</button>
+                      </span>
+                    </template>
+                    <template x-if="isUsingDirect(p)">
+                      <span>
+                        已切到直连（强度 <span x-text="p.direct_me_strength"></span>/5）。
+                        <button type="button"
+                                class="link-btn"
+                                @click="useDirectInsteadOfIntro(p)">改回引荐链</button>
+                      </span>
+                    </template>
+                  </div>
+                </template>
               </div>
               <span class="score" x-text="p.combined_score.toFixed(2)"></span>
             </div>

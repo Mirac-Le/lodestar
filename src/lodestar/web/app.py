@@ -217,7 +217,19 @@ def _to_graph_node(p: Person, strength_to_me: int | None) -> GraphNode:
     )
 
 
-def _path_result_to_dto(r: PathResult) -> PathResultDTO:
+def _path_result_to_dto(
+    r: PathResult,
+    me_direct_lookup: dict[int, int] | None = None,
+) -> PathResultDTO:
+    """Convert a PathResult to a wire DTO.
+
+    ``me_direct_lookup`` 是 ``{person_id: strength}`` 的"我和谁有 1 跳直接
+    边"映射；可选，仅在搜索结果（find_paths）里需要时传入。当且仅当
+    ``r.path_kind=='indirect'`` 且 target 在该映射里时，会把这条直连的
+    strength 透出到 ``direct_me_strength`` 字段，让前端能在引荐卡片上
+    给用户一个"改用直连"的 fallback 入口。其他场景（如 two-person path、
+    relationship 编辑）传 ``None`` 即可。
+    """
     industry, color, _ = infer_industry(r.target)
     assert r.target.id is not None
     node_ids: list[int] = [s.person_id for s in r.path]
@@ -227,6 +239,13 @@ def _path_result_to_dto(r: PathResult) -> PathResultDTO:
         if prev is not None:
             edge_ids.append(_edge_id(prev, nid))
         prev = nid
+    direct_me_strength: int | None = None
+    if (
+        r.path_kind == "indirect"
+        and me_direct_lookup is not None
+        and r.target.id in me_direct_lookup
+    ):
+        direct_me_strength = me_direct_lookup[r.target.id]
     return PathResultDTO(
         target_id=r.target.id,
         target_name=r.target.name,
@@ -248,6 +267,7 @@ def _path_result_to_dto(r: PathResult) -> PathResultDTO:
         is_wishlist=r.target.is_wishlist,
         node_ids=node_ids,
         edge_ids=edge_ids,
+        direct_me_strength=direct_me_strength,
     )
 
 
@@ -504,14 +524,26 @@ def _build_mount_app(spec: MountSpec) -> FastAPI:  # noqa: C901  (router-heavy)
             reverse=True,
         )[: body.top_k]
         nodes, edges = _highlighted_elements(combined)
-        indirect_dto = [_path_result_to_dto(r) for r in indirect]
+        # 给前端 indirect 卡片提供 fallback 信号：算法判 indirect 的目标，
+        # 若其实和"我"有 1 跳直接边（含被惩罚的弱边），把那条边 strength
+        # 透出去，UI 才能渲染"改用直连"按钮。一次性建表避免对每个候选
+        # 单独查库；不在 PathFinder 里算是因为它不该绑死 web DTO 形状。
+        me = repo.get_me()
+        me_direct_lookup: dict[int, int] = {}
+        if me is not None and me.id is not None:
+            for rel in repo.list_relationships():
+                if rel.source_id == me.id:
+                    me_direct_lookup[rel.target_id] = rel.strength
+                elif rel.target_id == me.id:
+                    me_direct_lookup[rel.source_id] = rel.strength
+        indirect_dto = [_path_result_to_dto(r, me_direct_lookup) for r in indirect]
         contacted_dto = [_path_result_to_dto(r) for r in contacted]
         wishlist_dto = [_path_result_to_dto(r) for r in wishlist]
         return SearchResponse(
             goal=body.goal,
             intent_summary=intent.summary or body.goal,
             intent_keywords=intent.keywords,
-            results=[_path_result_to_dto(r) for r in combined],
+            results=[_path_result_to_dto(r, me_direct_lookup) for r in combined],
             indirect=indirect_dto,
             contacted=contacted_dto,
             wishlist=wishlist_dto,

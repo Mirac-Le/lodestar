@@ -105,6 +105,11 @@ class PathResultDTO(BaseModel):
     is_wishlist: bool = False      # user-curated "I want to know them" marker
     edge_ids: list[str] = []       # graph edges making up this single path
     node_ids: list[int] = []       # graph nodes making up this single path
+    # 仅当 path_kind=='indirect' 且 me 与 target 之间确实存在 1 跳直接边时
+    # 填该边的 strength（1-5）；否则为 None。前端用它在 indirect 卡片底部
+    # 渲染"你也直接认识他、点此改用直连"的 fallback 入口——算法因为
+    # strength<weak_me_floor 默认推荐走引荐，但用户应当看到并能一键切换。
+    direct_me_strength: int | None = None
 
 
 class SearchRequest(BaseModel):

@@ -48,6 +48,12 @@ class Settings(BaseSettings):
     # 替代路径，仍会回退到这条弱边（标 path_kind=weak）。默认 4 表示
     # strength≤3（点头之交 / 弱认识 / 普通朋友）都倾向走引荐，只有熟朋友
     # 及以上算「可直接办成」的直连；可用 LODESTAR_WEAK_ME_FLOOR 调松或调严。
+    #
+    # UI 配套：当某 indirect 路径的目标其实和"我"也有 1 跳直接边（只是
+    # strength<weak_me_floor 被惩罚了），后端会通过 `PathResultDTO.
+    # direct_me_strength` 把那条边的强度透传到前端，indirect 卡片底部
+    # 渲染"你也直接认识他、改用直连/改回引荐链"的 fallback 入口——
+    # 算法的判断保持不变，但用户能一眼看到并一键覆盖。
     weak_me_floor: int = Field(default=4, ge=1, le=5)
 
     # ----- Stage-2 reranker -----

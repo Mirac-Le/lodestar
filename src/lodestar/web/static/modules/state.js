@@ -108,6 +108,15 @@ export function appState() {
     strengthBusy: false,
     detailReembedBusy: false,
 
+    /* ---- weak-direct fallback overrides ----
+     * 算法对 strength<weak_me_floor 的"我→某人"直连边会加重惩罚，
+     * 让该联系人落到 indirect 桶，推一条经熟人引荐的链路。但用户其实
+     * 也认识此人——只是关系一般。这里保留每个被用户切到"直连"的
+     * indirect 行的原始引荐链，键为 target_id，值为最初的 PathResultDTO；
+     * "改回引荐链"按钮就从这里捞回来。再次 runSearch / clearSearch
+     * 时会清空，避免跨查询串台。 */
+    directOverrides: {},
+
     /* ---- AI enrich state ---- */
     aiPreviewBusy: false,
     aiPreviewError: null,
@@ -391,6 +400,7 @@ export function appState() {
         return;
       }
       this.searching = true;
+      this.directOverrides = {};
       try {
         const resp = await api("/api/search", {
           method: "POST",
@@ -463,6 +473,7 @@ export function appState() {
       this.searchActive = false;
       this.pathMode = false;
       this.pairLabels = null;
+      this.directOverrides = {};
       this.enterAmbientMode();
     },
 
@@ -513,6 +524,75 @@ export function appState() {
         endpoints,
         fit: true,
       });
+    },
+
+    /* -------- weak direct fallback (toggle from indirect card) --------
+     *
+     * 当 indirect 卡片的 `direct_me_strength` 不为 null 时，说明算法
+     * 推荐了引荐链路，但你与目标其实有 1 跳直接边（只是 strength 弱
+     * 到被 weak_me_floor 惩罚）。点"改用直连"会把该行的 path / node_ids
+     * / edge_ids 替换成合成的"我 → 目标"直连，并把原引荐链存进
+     * directOverrides；再点"改回引荐链"则把原值恢复。
+     *
+     * 关键不变量：替换不出 indirect 桶，target_id 不变，所以列表 DOM
+     * key 稳定不重排，用户视线不丢。
+     */
+    useDirectInsteadOfIntro(p) {
+      const tid = p.target_id;
+      if (!tid) return;
+      // toggle back to original indirect path
+      if (this.directOverrides[tid]) {
+        const orig = this.directOverrides[tid];
+        delete this.directOverrides[tid];
+        this._replaceInResultLists(tid, orig);
+        this.highlightPath(orig, this._rowKey(orig));
+        return;
+      }
+      const meId = this.graph?.me_id;
+      const strength = p.direct_me_strength;
+      if (!meId || !strength) {
+        this.notify("缺少直连信息，无法切换", "error");
+        return;
+      }
+      const meName =
+        (this.graph?.nodes || []).find((n) => n.id === meId)?.label || "我";
+      const lo = Math.min(meId, tid);
+      const hi = Math.max(meId, tid);
+      const synthetic = {
+        ...p,
+        // 留在 indirect 桶里（path_kind 不改），靠 _directFallback 让模板
+        // 渲染成"已切到直连"的样子；rowKey/列表位置都不变。
+        _directFallback: true,
+        path: [
+          { person_id: meId, name: meName, strength: null, relation_from_previous: null },
+          {
+            person_id: tid,
+            name: p.target_name,
+            strength,
+            relation_from_previous: "你直接认识",
+          },
+        ],
+        node_ids: [meId, tid],
+        edge_ids: [`e_${lo}_${hi}`],
+        rationale: `直连：你与 ${p.target_name} 关系强度 ${strength}/5，可直接联系。`,
+      };
+      this.directOverrides[tid] = p;
+      this._replaceInResultLists(tid, synthetic);
+      this.highlightPath(synthetic, this._rowKey(synthetic));
+    },
+
+    /** 该行当前是否已被用户切到直连 fallback */
+    isUsingDirect(p) {
+      return Boolean(p && p.target_id && this.directOverrides[p.target_id]);
+    },
+
+    /** 在 indirect / paths 两个列表里就地替换同 target_id 的行（splice
+     *  保留 Alpine 反应性，不破坏 x-for 的 DOM 复用）。 */
+    _replaceInResultLists(tid, replacement) {
+      const i1 = this.indirect.findIndex((r) => r.target_id === tid);
+      if (i1 >= 0) this.indirect.splice(i1, 1, replacement);
+      const i2 = this.paths.findIndex((r) => r.target_id === tid);
+      if (i2 >= 0) this.paths.splice(i2, 1, replacement);
     },
 
     /* -------- query history -------- */
