@@ -356,7 +356,34 @@ button { cursor: pointer; }
 }
 .panel .close:hover { color: var(--text); background: var(--bg-overlay); }
 
-.panel-filters { top: 68px; left: 18px; width: 240px; padding: 14px; }
+.panel-filters {
+  top: 68px; left: 18px;
+  width: 264px;
+  padding: 16px;
+  font-size: 13.5px;
+}
+.panel-filters h3 {
+  font-size: 13px;
+  letter-spacing: 0.06em;
+}
+.panel-filters h3 .ct {
+  font-size: 12.5px;
+}
+.panel-filters .filter-group .label {
+  font-size: 12px;
+  letter-spacing: 0.06em;
+}
+.panel-filters .chip {
+  font-size: 13px;
+  padding: 4px 9px;
+}
+.panel-filters .range-row {
+  font-size: 13px;
+}
+.panel-filters input[type="text"]:not(.chip input) {
+  font-size: 13.5px;
+  height: 34px;
+}
 .panel-paths   {
   bottom: 18px; left: 18px; width: 420px; padding: 16px;
   max-height: 56vh; overflow: auto;
@@ -1661,7 +1688,13 @@ a:hover {
   margin-top: 10px; width: 100%;
 }
 
-/* ---- Feedback modal ---- */
+/* ---- Feedback modal ----
+   设计对齐 `.field` + `.mode-banner .pair-input`：
+   1. 所有 input/textarea/select 都 display:block + width:100%，避免 textarea
+      拿浏览器默认 cols 宽度看起来"歪"。
+   2. 边用 --border-strong 以区分纯黑背景；focus 走 --accent。
+   3. 原生 <select> 自绘下拉箭头贴近 pair-input 风格；option 列表仍由 OS
+      控制，只设深色背景。 */
 .modal-feedback {
   max-width: 560px;
   width: 92vw;
@@ -1669,27 +1702,176 @@ a:hover {
   overflow-y: auto;
 }
 
-.modal-feedback .form-row {
-  display: flex;
-  gap: 12px;
-}
-
 .modal-feedback label {
   display: block;
-  margin-bottom: 12px;
+  position: relative;
+  margin-bottom: 14px;
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  color: var(--text-muted);
 }
 
-.modal-feedback .hint {
-  color: var(--text-tertiary, #8a8f96);
-  font-size: 12px;
+.modal-feedback label input[type="text"],
+.modal-feedback label input[type="file"],
+.modal-feedback label textarea,
+.modal-feedback label select {
+  display: block;
+  width: 100%;
+  margin-top: 6px;
+  padding: 7px 10px;
+  font-size: 13.5px;
+  color: var(--text);
+  background: var(--bg-overlay);
+  border: 1px solid var(--border-strong);
+  border-radius: 6px;
+  font-family: inherit;
+  transition: border-color 0.12s, box-shadow 0.12s, background 0.12s;
+}
+.modal-feedback label input:hover,
+.modal-feedback label textarea:hover,
+.modal-feedback label select:hover {
+  border-color: var(--border-focus);
+}
+.modal-feedback label input:focus,
+.modal-feedback label textarea:focus,
+.modal-feedback label select:focus {
+  border-color: var(--accent);
+  background: var(--bg-overlay-2);
+  box-shadow: 0 0 0 3px var(--accent-ring);
+}
+.modal-feedback label textarea {
+  min-height: 60px;
+  resize: vertical;
+  line-height: 1.5;
+}
+.modal-feedback label select {
+  appearance: none;
+  -webkit-appearance: none;
+  padding-right: 30px;
+  cursor: pointer;
+  background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='10' height='10' viewBox='0 0 12 12'><path d='M3 4.5l3 3 3-3' stroke='%238a8f98' stroke-width='1.6' fill='none' stroke-linecap='round' stroke-linejoin='round'/></svg>");
+  background-repeat: no-repeat;
+  background-position: right 10px center;
+  background-color: var(--bg-overlay);
+}
+.modal-feedback label select option {
+  background: var(--bg-elevated);
+  color: var(--text);
+}
+
+/* 二栏：顶部 radio（bug / feature）与底部「姓名 + 联系方式」 */
+.modal-feedback .form-row {
+  display: flex;
+  gap: 14px;
+  margin-bottom: 14px;
+}
+.modal-feedback .form-row > label {
+  flex: 1;
+  margin-bottom: 0;
+}
+.modal-feedback .form-row > label:has(input[type="radio"]) {
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 13px;
+  font-weight: 500;
+  letter-spacing: -0.012em;
+  text-transform: none;
+  color: var(--text);
+  cursor: pointer;
+}
+.modal-feedback .form-row > label:has(input[type="radio"]) input {
+  width: auto;
+  margin: 0;
+  accent-color: var(--text);
+}
+
+/* 字数计数 / 截图提示等内嵌 hint */
+.modal-feedback label .hint {
   display: inline-block;
   margin-left: 8px;
+  font-size: 11.5px;
+  font-weight: 400;
+  letter-spacing: 0;
+  text-transform: none;
+  color: var(--text-muted);
 }
 
+/* 底部 ℹ️ 提交提示卡 */
+.modal-feedback > p.hint {
+  display: block;
+  margin: 6px 0 14px 0;
+  padding: 10px 12px;
+  background: var(--bg-overlay);
+  border: 1px solid var(--border-strong);
+  border-radius: 6px;
+  color: var(--text-secondary);
+  font-size: 12.5px;
+  font-weight: 400;
+  letter-spacing: 0;
+  text-transform: none;
+}
+
+/* 联系人补全下拉 — 与 .mode-banner .pair-suggest 风格一致 */
+.modal-feedback .pair-suggest {
+  position: absolute;
+  top: calc(100% + 4px);
+  left: 0;
+  right: 0;
+  max-height: 220px;
+  overflow-y: auto;
+  background: var(--bg-elevated);
+  border: 1px solid var(--border-strong);
+  border-radius: 6px;
+  box-shadow: var(--shadow-md);
+  z-index: 20;
+  padding: 4px 0;
+}
+.modal-feedback .pair-suggest-row {
+  padding: 6px 12px;
+  font-size: 13px;
+  color: var(--text);
+  cursor: pointer;
+  transition: background 0.08s ease;
+}
+.modal-feedback .pair-suggest-row:hover {
+  background: var(--bg-overlay-2);
+}
+
+/* 已选联系人 / 已选截图 chip */
+.modal-feedback .tag-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 8px;
+}
+.modal-feedback .tag-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  padding: 3px 4px 3px 10px;
+  background: var(--bg-overlay);
+  border: 1px solid var(--border-strong);
+  border-radius: 12px;
+  font-size: 12px;
+  font-weight: 500;
+  letter-spacing: -0.012em;
+  text-transform: none;
+  color: var(--text);
+}
 .modal-feedback .tag-chip button {
-  margin-left: 4px;
   background: transparent;
   border: none;
-  color: inherit;
+  color: var(--text-muted);
   cursor: pointer;
+  font-size: 11px;
+  padding: 0 6px;
+  border-radius: 8px;
+  line-height: 1;
+}
+.modal-feedback .tag-chip button:hover {
+  background: var(--bg-overlay-2);
+  color: var(--text);
 }

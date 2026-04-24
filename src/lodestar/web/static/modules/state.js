@@ -362,6 +362,7 @@ export function appState() {
         this.graph = await api("/api/graph");
         initCytoscape(this.graph);
         this.enterAmbientMode();
+        applyFilters(this.filters);
       } catch (e) {
         this.notify("加载图失败：" + e.message, "error");
       }
@@ -1016,6 +1017,10 @@ export function appState() {
     },
     clearFilters() {
       this.filters = { industries: [], minStrength: 0, search: "" };
+      applyFilters(this.filters);
+    },
+    /** 过滤面「名字/标签」输入框用：必须在 data 上暴露，模板才能调用。 */
+    reapplyGraphFilters() {
       applyFilters(this.filters);
     },
 
@@ -1863,7 +1868,11 @@ export function appState() {
     },
 
     async submitFeedback() {
-      if (!this.feedbackValid() || this.feedbackSubmitting) return;
+      if (this.feedbackSubmitting) return;
+      if (!this.feedbackValid()) {
+        this.notify("请填写所有必填项（检查标题/涉及人/截图/历史对比/影响程度/姓名联系方式）", "error", 5000);
+        return;
+      }
       this.feedbackSubmitting = true;
       const f = this.feedback;
       const form = f.type === "bug" ? {
@@ -1910,7 +1919,7 @@ export function appState() {
         this.notify(`已提交 ${resp.ticket_id}，请发给技术同事`, "info", 6000);
         this.closeFeedback();
       } catch (e) {
-        this.notify(`提交失败：${e.message}`, "error", 5000);
+        this.notify(`提交失败：${e.message}`, "error", 8000);
       } finally {
         this.feedbackSubmitting = false;
       }

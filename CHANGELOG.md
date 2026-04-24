@@ -12,6 +12,8 @@
 
 ### Changed
 - `docs/feedback/` 加入 `.gitignore`（默认不入库，反馈 md 内联联系人姓名 / 关系，当作本地 artifact 管理）。
+- **反馈表单 UI 对齐工具整体风格**：重写 `.modal-feedback` 的 CSS，`input / textarea / select` 统一 `display:block; width:100%`（此前 textarea 走浏览器默认 cols 宽度导致和 input 不等宽、看起来"歪"）；边框从 `--border` 换到 `--border-strong`，纯黑底上对比度明显提升；`<select>` 自绘下拉箭头贴近 `.mode-banner .pair-input` 风格；联系人补全下拉复用 `.pair-suggest-row` class，视觉与双人路径一致。
+- **反馈填写指南**：新增 [`docs/feedback-guide.md`](docs/feedback-guide.md)，给业务同事的填写规约（标题 / 涉及的人 / Bug 五字段 / When-Then 句式 / 影响程度 / 截图），含好例与坏例。`docs/instructions.md` 里的简短反馈小节改为摘要 + 链接到该指南。
 
 > 设计稿 & 实施计划：[`docs/plans/2026-04-23-feedback-system-design.md`](docs/plans/2026-04-23-feedback-system-design.md) / [`docs/plans/2026-04-23-feedback-system-plan.md`](docs/plans/2026-04-23-feedback-system-plan.md)
 

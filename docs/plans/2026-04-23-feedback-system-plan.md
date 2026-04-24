@@ -969,7 +969,7 @@ _HISTORY_LABEL = {
 }
 
 _SEVERITY_LABEL = {
-    "blocking": "🔥 阻塞签单",
+    "blocking": "🔥 影响正常使用",
     "daily": "⚠️ 每天都遇到，靠绕能过",
     "nice": "💭 没这个也行，有了更好",
 }
@@ -1852,7 +1852,7 @@ git commit -m "feat(frontend): add Alpine state for feedback form"
       <label>影响程度
         <select x-model="feedback.severity">
           <option value="">请选</option>
-          <option value="blocking">🔥 阻塞签单</option>
+          <option value="blocking">🔥 影响正常使用</option>
           <option value="daily">⚠️ 每天都遇到</option>
           <option value="nice">💭 有了更好</option>
         </select>

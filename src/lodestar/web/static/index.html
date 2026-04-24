@@ -4,7 +4,7 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1">
   <title>Lodestar — Personal Network Navigator</title>
-  <link rel="stylesheet" href="/static/style.css?v=20260424-feedback">
+  <link rel="stylesheet" href="/static/style.css?v=20260425-filters">
   <script src="/static/cytoscape.min.js"></script>
   <script src="/static/echarts.min.js"></script>
   <!-- ESM 入口：必须先于 alpine.min.js 加载完成，否则 Alpine 解析
@@ -16,7 +16,7 @@
        照样会复用缓存里的旧 module。所以真正抗缓存靠 server 端给
        /static 加 `Cache-Control: no-cache`（见 web/app.py 的
        _NoCacheStaticFiles），这里的 v 只是给老缓存用户兜个底。 -->
-  <script type="module" src="/static/app.js?v=20260424-feedback"></script>
+  <script type="module" src="/static/app.js?v=20260425-filters"></script>
   <script defer src="/static/alpine.min.js"></script>
 </head>
 <body x-data="appState()" x-init="init()" :class="searching ? 'searching' : ''">
@@ -287,7 +287,7 @@
       <div class="label">名字 / 标签</div>
       <input type="text" placeholder="输入关键词"
              x-model="filters.search"
-             @input.debounce.300ms="applyFilters(filters)">
+             @input.debounce.300ms="reapplyGraphFilters()">
     </div>
   </div>
 
@@ -432,12 +432,12 @@
       </div>
       <div class="focus-headline" x-text="focusSummary.headline"></div>
       <div class="focus-reason" x-text="focusSummary.reason"></div>
-      <template x-if="focusSummary.strength">
+      <template x-if="focusSummary && focusSummary.strength">
         <div class="focus-meter-row">
           <span class="focus-meter-label">可信度</span>
           <div class="bars bars-compact">
             <template x-for="i in 5" :key="i">
-              <div class="bar" :class="i <= focusSummary.strength ? 'on' : ''"></div>
+              <div class="bar" :class="i <= (focusSummary?.strength ?? 0) ? 'on' : ''"></div>
             </template>
           </div>
         </div>
@@ -1317,8 +1317,8 @@
                  placeholder="输入姓名关键词搜索">
           <div class="pair-suggest" x-show="feedbackPersonQuery">
             <template x-for="n in feedbackPersonMatches()" :key="n.id">
-              <div class="pair-item" @mousedown.prevent="addFeedbackPerson(n)">
-                <span x-text="n.label"></span>
+              <div class="pair-suggest-row" @mousedown.prevent="addFeedbackPerson(n)">
+                <span class="name" x-text="n.label"></span>
               </div>
             </template>
           </div>
@@ -1372,7 +1372,7 @@
         <label>影响程度
           <select x-model="feedback.severity">
             <option value="">请选</option>
-            <option value="blocking">🔥 阻塞签单</option>
+            <option value="blocking">🔥 影响正常使用</option>
             <option value="daily">⚠️ 每天都遇到</option>
             <option value="nice">💭 有了更好</option>
           </select>

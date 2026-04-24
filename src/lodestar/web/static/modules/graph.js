@@ -482,13 +482,28 @@ export function applyFilters(filters) {
         if (s < filters.minStrength) visible = false;
       }
       if (filters.search) {
-        const q = filters.search.toLowerCase();
-        const hay = [
-          raw.label, raw.bio || "", ...(raw.tags || []),
-          ...(raw.companies || []), ...(raw.cities || []),
-          ...(raw.skills || []), ...(raw.needs || []),
-        ].join(" ").toLowerCase();
-        if (!hay.includes(q)) visible = false;
+        const q = filters.search.trim().toLowerCase();
+        if (q) {
+          const hay = [
+            raw.label,
+            raw.bio || "",
+            raw.notes || "",
+            ...(raw.tags || []),
+            ...(raw.companies || []),
+            ...(raw.cities || []),
+            ...(raw.skills || []),
+            ...(raw.needs || []),
+          ]
+            .join(" ")
+            .toLowerCase();
+          // 支持多空格分词：任一 token 命中即显示（AND）
+          const tokens = q.split(/\s+/).filter(Boolean);
+          const ok =
+            tokens.length === 0
+              ? true
+              : tokens.every((t) => hay.includes(t));
+          if (!ok) visible = false;
+        }
       }
       n.style("display", visible ? "element" : "none");
     });

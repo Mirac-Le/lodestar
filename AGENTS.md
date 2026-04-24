@@ -14,6 +14,7 @@
 - README 的 **Quick start 是契约**：必须是干净环境里**逐行复制粘贴可跑通的端到端流程**（用户原话："从头生成下，检测是不是和 readme 里写的标准流程一样，放到 quick start 里"）。每次动数据模型 / CLI 表面 / serve 拓扑后，先在干净环境照 README 跑一遍，把"隐含步骤"（建库、`--embed`、`reembed`、密码设置、`--mount` 写法等）补**显式**进去再 commit；不要把"懂行的人才知道还要做 X"留给读者。
 - 根目录 `CHANGELOG.md`、能力向页面（如 `docs/product-overview-*.md`）与 `docs/instructions.md`：用准确、自然的中文技术表述，避免机翻腔或误译专业词（特别是上下文敏感的英文术语，如 `chip` 在 UI / 关系节点语境下不要直译成"芯片"，遇到不确定优先保留原词或问用户）；不要把一次性口头需求混进 changelog 正文。
 - 对外文档（`docs/product-overview-*.md`、`docs/instructions.md`、`CHANGELOG.md`）**不要使用「给老板汇报 / 向老板演示 / 老板视角」等汇报性措辞**，统一改为客观、逻辑清晰的功能描述；流程图优先用 **ASCII 示意图**，方便离线阅读、不依赖截图占位。
+- **Commit message 统一用英文**（Conventional Commits 风格，如 `feat(web): ...` / `fix(db): ...`），不要中英文混杂；正文里的长描述也用英文。文档（CHANGELOG / docs/）本身继续用中文，这条只约束 git 历史。
 - 默认图谱布局**不得把 Me 节点摆在中心做"自我放射状"扇出**（即"my universe"式以 Me 为太阳、其他节点环绕一周的辐射拓扑）。该回归出现过多次，前端 `app.js` / `style.css` 的 cache-bust tag 用 `YYYYMMDD-no-me-radial-N` 来追踪每次修复；新增 / 重构 layout 时 Me 必须与其他节点平等参与力导布局，不要给 Me 单独安排径向位置。
 
 ## Learned Workspace Facts
@@ -37,3 +38,5 @@
 - 「用一句话加关系」（关系自然语言解析，Web UI 顶栏「新关系」抽屉）是已落地的真实功能，**不是 placeholder**：自由文本描述谁认识谁 → `Anonymizer` 脱敏 → LLM 解析为结构化关系提案；**不会自动建联系人**——文本中出现的陌生姓名只显示在提示区，需先用「新联系人」录入再回来解析。
 - Stage-2 重排 UI 上的 **L2** 选项当前是占位（灰显 + `TODO` 标记），对应代码路径**未实现**，不要假设它能跑或对其做评测；评测仍以 `none` / `llm` / `bge` 三路为准。
 - `docs/imgs/` 下的临时图按命名约定走 `.gitignore`：`docs/imgs/tmp/` 与 `docs/imgs/page-*` 已忽略（commit `696ebf4`），新增浏览器自动截图 / 草稿截屏沿用这两个前缀就不会被误提交。
+- 项目有**两类用户角色**：开发者（本人，读代码 / 跑 CLI / 发 PR）与业务同事（只用 WebUI 跑客户）。两边的错误预期与 UI 容错要求不同：业务侧优先做输入门槛 + 自动捕获上下文，不要求他们懂 stack trace。团队沟通走**飞书**，ticket id 是业务同事与开发者的唯一对齐 token。
+- **反馈系统**（`/api/feedback` + topbar「📝 反馈」按钮，2026-04-24 落地）：业务同事提 bug / 需求时，前端自动打包 mount_slug / view_mode / query / 高亮路径 / `directOverrides` 状态 + 最近 10 次 API req+resp + 最近 20 条前端错误 + 涉及联系人的 db 快照（跑过 `lodestar.privacy.scrub` PII 脱敏），后端渲染成 `docs/feedback/<slug>/FB-YYYYMMDD-NNNN.md`。md 头部带给 AI 的处理指引（「bug / 设计之争时先停下问开发，不要擅自改逻辑」guardrail）。设计目标是让 AI 能**一次在编码过程中完全解决问题**——所以任何新功能出 bug 时，优先要求业务同事走反馈按钮而不是口头描述；`docs/feedback/` 已入 `.gitignore`（含 PII，当本地 artifact 管理）。

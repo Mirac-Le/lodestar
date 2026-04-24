@@ -35,7 +35,7 @@ _HISTORY_LABEL = {
 }
 
 _SEVERITY_LABEL = {
-    "blocking": "🔥 阻塞签单",
+    "blocking": "🔥 影响正常使用",
     "daily": "⚠️ 每天都遇到，靠绕能过",
     "nice": "💭 没这个也行，有了更好",
 }
@@ -63,9 +63,12 @@ def render_ticket_md(payload: dict[str, Any]) -> str:
         "---\n\n"
     )
 
-    prompt = _PROMPT_HEADER.format(
-        kind=("bug" if type_ == "bug" else "需求"),
-    ) + "\n---\n\n"
+    prompt = (
+        _PROMPT_HEADER.format(
+            kind=("bug" if type_ == "bug" else "需求"),
+        )
+        + "\n---\n\n"
+    )
 
     body = _render_bug_body(form) if type_ == "bug" else _render_feature_body(form)
 
@@ -77,23 +80,26 @@ def render_ticket_md(payload: dict[str, Any]) -> str:
     # 截图部分（md 里只写文件引用，真实 base64 由 endpoint 落盘到 attachments/）
     screenshots_md = ""
     if screenshots:
-        screenshots_md = "## 截图\n" + "\n".join(
-            f"![{s['filename']}](./attachments/{s['filename']})"
-            for s in screenshots
-        ) + "\n\n"
+        screenshots_md = (
+            "## 截图\n"
+            + "\n".join(f"![{s['filename']}](./attachments/{s['filename']})" for s in screenshots)
+            + "\n\n"
+        )
 
     tech = _render_tech_data(auto, snapshot)
 
-    return "".join([
-        frontmatter,
-        prompt,
-        involved,
-        body,
-        impact,
-        screenshots_md,
-        "---\n\n## 🔧 自动打包的技术数据\n\n",
-        tech,
-    ])
+    return "".join(
+        [
+            frontmatter,
+            prompt,
+            involved,
+            body,
+            impact,
+            screenshots_md,
+            "---\n\n## 🔧 自动打包的技术数据\n\n",
+            tech,
+        ]
+    )
 
 
 def _render_bug_body(f: dict[str, Any]) -> str:
@@ -112,10 +118,7 @@ def _render_bug_body(f: dict[str, Any]) -> str:
 
 def _render_feature_body(f: dict[str, Any]) -> str:
     acceptance = "\n".join(f["acceptance"])
-    workaround = (
-        f"## 现在你是怎么凑合的\n{f['workaround']}\n\n"
-        if f.get("workaround") else ""
-    )
+    workaround = f"## 现在你是怎么凑合的\n{f['workaround']}\n\n" if f.get("workaround") else ""
     return (
         f"## 💡 标题\n{f['title']}\n\n"
         f"## 用户故事\n{f['user_story']}\n\n"
@@ -142,21 +145,30 @@ def _render_tech_data(
     snapshot: list[dict[str, Any]],
 ) -> str:
     state_json = json.dumps(
-        {k: auto[k] for k in (
-            "mount_slug", "view_mode", "search_active", "query",
-            "detail_person_id", "active_path_key", "direct_overrides",
-            "indirect_targets", "contacted_targets",
-        )},
-        ensure_ascii=False, indent=2,
+        {
+            k: auto[k]
+            for k in (
+                "mount_slug",
+                "view_mode",
+                "search_active",
+                "query",
+                "detail_person_id",
+                "active_path_key",
+                "direct_overrides",
+                "indirect_targets",
+                "contacted_targets",
+            )
+        },
+        ensure_ascii=False,
+        indent=2,
     )
-    api_json = json.dumps(auto.get("api_trace", []),
-                          ensure_ascii=False, indent=2)
-    err_json = json.dumps(auto.get("error_buffer", []),
-                          ensure_ascii=False, indent=2)
+    api_json = json.dumps(auto.get("api_trace", []), ensure_ascii=False, indent=2)
+    err_json = json.dumps(auto.get("error_buffer", []), ensure_ascii=False, indent=2)
 
     parts = [
         "### 前端状态（提交时）\n```json\n",
-        state_json, "\n```\n\n",
+        state_json,
+        "\n```\n\n",
         "### db 快照（涉及联系人 + 1 跳邻居，已脱敏）\n\n",
     ]
     for entry in snapshot:
@@ -184,12 +196,15 @@ def _render_tech_data(
             )
         parts.append("\n")
 
-    parts.extend([
-        "### API 回放（最近 10 次请求）\n```json\n",
-        api_json, "\n```\n\n",
-        "### 前端错误 buffer\n```json\n",
-        err_json, "\n```\n\n",
-        f"### 浏览器 / 视口\n- UA: `{auto['user_agent']}`\n"
-        f"- Viewport: `{auto['viewport']}`\n",
-    ])
+    parts.extend(
+        [
+            "### API 回放（最近 10 次请求）\n```json\n",
+            api_json,
+            "\n```\n\n",
+            "### 前端错误 buffer\n```json\n",
+            err_json,
+            "\n```\n\n",
+            f"### 浏览器 / 视口\n- UA: `{auto['user_agent']}`\n- Viewport: `{auto['viewport']}`\n",
+        ]
+    )
     return "".join(parts)
