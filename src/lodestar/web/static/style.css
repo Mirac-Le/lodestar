@@ -1840,6 +1840,50 @@ a:hover {
   background: var(--bg-overlay-2);
 }
 
+/* 截图：隐藏原生 file 输入（选完会清空 value，浏览器总显示「未选择」） */
+.modal-feedback .feedback-screenshot-field {
+  margin-bottom: 14px;
+}
+.modal-feedback .feedback-screenshot-heading {
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  color: var(--text-muted);
+  margin-bottom: 6px;
+}
+.modal-feedback .feedback-file-row {
+  position: relative;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px;
+  margin-top: 2px;
+}
+.modal-feedback .feedback-file-input-hidden {
+  position: absolute;
+  left: 0;
+  top: 0;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: 0;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+  opacity: 0;
+}
+.modal-feedback .feedback-file-trigger {
+  flex: 0 0 auto;
+  margin: 0;
+}
+.modal-feedback .feedback-file-status {
+  font-size: 12.5px;
+  color: var(--text-secondary);
+  flex: 1 1 160px;
+  min-width: 0;
+}
+
 /* 已选联系人 / 已选截图 chip */
 .modal-feedback .tag-chips {
   display: flex;

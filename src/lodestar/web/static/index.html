@@ -4,7 +4,7 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1">
   <title>Lodestar — Personal Network Navigator</title>
-  <link rel="stylesheet" href="/static/style.css?v=20260425-filters">
+  <link rel="stylesheet" href="/static/style.css?v=20260425-screenshot-file">
   <script src="/static/cytoscape.min.js"></script>
   <script src="/static/echarts.min.js"></script>
   <!-- ESM 入口：必须先于 alpine.min.js 加载完成，否则 Alpine 解析
@@ -16,7 +16,7 @@
        照样会复用缓存里的旧 module。所以真正抗缓存靠 server 端给
        /static 加 `Cache-Control: no-cache`（见 web/app.py 的
        _NoCacheStaticFiles），这里的 v 只是给老缓存用户兜个底。 -->
-  <script type="module" src="/static/app.js?v=20260425-filters"></script>
+  <script type="module" src="/static/app.js?v=20260425-screenshot-file"></script>
   <script defer src="/static/alpine.min.js"></script>
 </head>
 <body x-data="appState()" x-init="init()" :class="searching ? 'searching' : ''">
@@ -1383,12 +1383,25 @@
           <label>飞书 / 手机尾号<input type="text" x-model="feedback.submitterContact"></label>
         </div>
 
-        <label>截图
-          <template x-if="feedback.type === 'bug'">
-            <span class="hint">Bug 必须至少 1 张</span>
-          </template>
-          <input type="file" accept="image/*" multiple
-                 @change="onFeedbackScreenshotPick($event.target.files); $event.target.value=''">
+        <div class="feedback-screenshot-field">
+          <div class="feedback-screenshot-heading">截图
+            <template x-if="feedback.type === 'bug'">
+              <span class="hint">Bug 必须至少 1 张</span>
+            </template>
+          </div>
+          <!-- 选完后会清空原生 input，否则同一张图无法再次选；因此不要依赖
+               浏览器自带的「未选择任何文件」文案，用下方状态行反映已选列表。 -->
+          <div class="feedback-file-row">
+            <input type="file" x-ref="feedbackScreenshotInput" class="feedback-file-input-hidden"
+                   accept="image/*" multiple
+                   @change="onFeedbackScreenshotPick($event.target.files); $event.target.value=''">
+            <button type="button" class="btn feedback-file-trigger"
+                    @click="$refs.feedbackScreenshotInput.click()">选择文件</button>
+            <span class="feedback-file-status"
+                  x-text="feedback.screenshots.length
+                    ? `已选 ${feedback.screenshots.length} 张（可继续添加，最多 3 张）`
+                    : '尚未选择'"></span>
+          </div>
           <div class="tag-chips">
             <template x-for="(s, i) in feedback.screenshots" :key="i">
               <span class="tag-chip">
@@ -1397,7 +1410,7 @@
               </span>
             </template>
           </div>
-        </label>
+        </div>
 
         <p class="hint">
           ℹ️ 提交时会一并打包最近 10 次操作产生的技术数据，供开发定位问题。
